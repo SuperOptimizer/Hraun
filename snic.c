@@ -79,7 +79,7 @@ typedef struct Heap {
 
 static
 Heap heap_alloc(int size) {
-  return (Heap){.len = 0, .size = size, .nodes = (HeapNode*)calloc(size+1, sizeof(HeapNode))};
+  return (Heap){.len = 0, .size = size, .nodes = (HeapNode*)calloc(size*2+1, sizeof(HeapNode))};
 }
 
 static
@@ -131,6 +131,14 @@ HeapNode heap_pop(Heap *heap) {
 
 // SNIC ////////////////////////////////////////////////////////////////////////
 
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT
+#endif
+
+
+
 // This is based on the paper and the code from:
 // - https://www.epfl.ch/labs/ivrl/research/snic-superpixels/
 // - https://github.com/achanta/SNIC/
@@ -145,13 +153,11 @@ typedef struct Superpixel {
   u32 neighs[SUPERPIXEL_MAX_NEIGHS];
 } Superpixel;
 
-export
-int snic_superpixel_max_neighs() {
+EXPORT int snic_superpixel_max_neighs()  {
   return SUPERPIXEL_MAX_NEIGHS;
 }
 
-inline
-int superpixel_add_neighbors(Superpixel *superpixels, u32 k1, u32 k2) {
+EXPORT inline int superpixel_add_neighbors(Superpixel *superpixels, u32 k1, u32 k2) {
   int i = 0;
   for (; i < SUPERPIXEL_MAX_NEIGHS; i++) {
     if (superpixels[k1].neighs[i] == 0) {
@@ -164,8 +170,7 @@ int superpixel_add_neighbors(Superpixel *superpixels, u32 k1, u32 k2) {
   return 1;
 }
 
-export
-int snic_superpixel_count(int lx, int ly, int lz, int d_seed) {
+EXPORT int snic_superpixel_count(int lx, int ly, int lz, int d_seed)  {
   int cz = (lz - d_seed/2 + d_seed - 1)/d_seed;
   int cy = (ly - d_seed/2 + d_seed - 1)/d_seed;
   int cx = (lx - d_seed/2 + d_seed - 1)/d_seed;
@@ -173,8 +178,7 @@ int snic_superpixel_count(int lx, int ly, int lz, int d_seed) {
 }
 
 // The labels must be the same size as img, and all zeros.
-export
-int snic(f32 *img, int lx, int ly, int lz, int d_seed, f32 compactness, f32 lowmid, f32 midhig, u32 *labels, Superpixel* superpixels) {
+EXPORT int snic(f32 *img, int lx, int ly, int lz, int d_seed, f32 compactness, f32 lowmid, f32 midhig, u32 *labels, Superpixel* superpixels) {
   int neigh_overflow = 0; // Number of neighbors that couldn't be added.
   int lylx = ly * lx;
   int img_size = lylx * lz;
@@ -182,7 +186,7 @@ int snic(f32 *img, int lx, int ly, int lz, int d_seed, f32 compactness, f32 lowm
   #define sqr(x) ((x)*(x))
 
   // Initialize priority queue with seeds on a grid with step d_seed.
-  Heap pq = heap_alloc(img_size);
+  Heap pq = heap_alloc(img_size*16);
   u32 numk = 0;
   for (u16 iz = d_seed/2; iz < lz; iz += d_seed) {
     for (u16 ix = d_seed/2; ix < lx; ix += d_seed) {

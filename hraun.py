@@ -125,13 +125,26 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
 
 
     # Set SNIC parameters
-    d_seed = 5
-    compactness = 5.0
+    d_seed = 20
+    compactness = 50.0
     lowmid = 0.25
     midhig = 0.75
 
+    #combined_chunk *=256.0
+
     # Call the SNIC function
-    neigh_overflow, labels, superpixels = snic.snic(combined_chunk, d_seed, compactness, lowmid, midhig)
+    print("combined_chunk shape:", combined_chunk.shape)
+    print("combined_chunk dtype:", combined_chunk.dtype)
+    print("combined_chunk flags:", combined_chunk.flags)
+
+    # Create a contiguous copy of combined_chunk
+    contig_chunk = np.ascontiguousarray(combined_chunk, dtype=np.float32)
+
+    print("combined_chunk shape after contiguous copy:", contig_chunk.shape)
+    print("combined_chunk dtype after contiguous copy:", contig_chunk.dtype)
+    print("combined_chunk flags after contiguous copy:", contig_chunk.flags)
+
+    neigh_overflow, labels, superpixels = snic.snic(contig_chunk, d_seed, compactness, lowmid, midhig)
 
     print()
 
