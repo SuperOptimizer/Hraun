@@ -8,158 +8,105 @@ from skimage.restoration import denoise_tv_chambolle
 from skimage.filters import gaussian
 from skimage.measure import block_reduce
 from scipy.ndimage import uniform_filter
+from skimage import segmentation, filters
+from skimage.filters import unsharp_mask
+from glcae import global_local_contrast_3d
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+from scipy import ndimage
+import snic
+
+def clip(chunk):
+    # Flatten the array to 1D for histogram calculation
+    flat_arr = chunk.flatten()
+
+    # Calculate the histogram
+    hist, bins = np.histogram(flat_arr, bins=256, range=(0, 256))
+
+    # Calculate the cumulative sum of the histogram
+    cum_sum = np.cumsum(hist)
+
+    # Calculate the total number of pixels
+    total_pixels = flat_arr.shape[0]
+
+    # Calculate the indices corresponding to the middle 95% of values
+    lower_idx = np.argmax(cum_sum >= 0.025 * total_pixels)
+    upper_idx = np.argmax(cum_sum >= 0.975 * total_pixels)
+
+    # Cap off the bottom and top 2.5% of values
+    arr_capped = np.clip(chunk, bins[lower_idx], bins[upper_idx])
+
+    # Rescale the capped array back to the full range of uint8
+    arr_rescaled = ((arr_capped - bins[lower_idx]) * 255 / (bins[upper_idx] - bins[lower_idx])).astype(np.uint8)
+    return arr_rescaled
+
+def rescale(arr):
+    return (arr - arr.min()) / (arr.max() - arr.min())
+
+def do_mask(combined_chunk, labels, superpixels, threshold):
+    mask = np.zeros_like(combined_chunk, dtype=bool)
+
+    for i, superpixel in enumerate(superpixels):
+        if i == 0:
+            continue  # Skip the background superpixel (label 0)
+
+        if superpixel.c >= threshold:
+            mask |= (labels == i)
+
+    masked_chunk = np.zeros_like(combined_chunk)
+    masked_chunk[mask] = combined_chunk[mask]
+    return masked_chunk
 
 
-#https://github.com/awangenh/fastaniso
-def anisodiff3(stack,niter=1,kappa=50,gamma=0.1,step=(1.,1.,1.),option=1,ploton=False):
-    """
-    3D Anisotropic diffusion.
 
-    Usage:
-    stackout = anisodiff(stack, niter, kappa, gamma, option)
+def avg_pool_3d(input, pool_size, stride):
+    input_depth, input_height, input_width = input.shape
 
-    Arguments:
-            stack  - input stack
-            niter  - number of iterations
-            kappa  - conduction coefficient 20-100 ?
-            gamma  - max value of .25 for stability
-            step   - tuple, the distance between adjacent pixels in (z,y,x)
-            option - 1 Perona Malik diffusion equation No 1
-                     2 Perona Malik diffusion equation No 2
-            ploton - if True, the middle z-plane will be plotted on every
-                 iteration
+    output = np.zeros_like(input)
 
-    Returns:
-            stackout   - diffused stack.
+    for d in range(0, input_depth, stride):
+        for i in range(0, input_height, stride):
+            for j in range(0, input_width, stride):
+                start_d = d
+                start_i = i
+                start_j = j
+                end_d = min(start_d + pool_size[0], input_depth)
+                end_i = min(start_i + pool_size[1], input_height)
+                end_j = min(start_j + pool_size[2], input_width)
 
-    kappa controls conduction as a function of gradient.  If kappa is low
-    small intensity gradients are able to block conduction and hence diffusion
-    across step edges.  A large value reduces the influence of intensity
-    gradients on conduction.
+                pool_region = input[start_d:end_d, start_i:end_i, start_j:end_j]
+                output[start_d:end_d, start_i:end_i, start_j:end_j] = np.mean(pool_region)
 
-    gamma controls speed of diffusion (you usually want it at a maximum of
-    0.25)
+    return output
 
-    step is used to scale the gradients in case the spacing between adjacent
-    pixels differs in the x,y and/or z axes
-
-    Diffusion equation 1 favours high contrast edges over low contrast ones.
-    Diffusion equation 2 favours wide regions over smaller ones.
-
-    Reference:
-    P. Perona and J. Malik.
-    Scale-space and edge detection using ansotropic diffusion.
-    IEEE Transactions on Pattern Analysis and Machine Intelligence,
-    12(7):629-639, July 1990.
-
-    Original MATLAB code by Peter Kovesi
-    School of Computer Science & Software Engineering
-    The University of Western Australia
-    pk @ csse uwa edu au
-    <http://www.csse.uwa.edu.au>
-
-    Translated to Python and optimised by Alistair Muldal
-    Department of Pharmacology
-    University of Oxford
-    <alistair.muldal@pharm.ox.ac.uk>
-
-    June 2000  original version.
-    March 2002 corrected diffusion eqn No 2.
-    July 2012 translated to Python
-    """
-
-    # ...you could always diffuse each color channel independently if you
-    # really want
-    if stack.ndim == 4:
-        #warnings.warn("Only grayscale stacks allowed, converting to 3D matrix")
-        stack = stack.mean(3)
-
-    # initialize output array
-    stack = stack.astype('float32')
-    stackout = stack.copy()
-
-    # initialize some internal variables
-    deltaS = np.zeros_like(stackout)
-    deltaE = deltaS.copy()
-    deltaD = deltaS.copy()
-    NS = deltaS.copy()
-    EW = deltaS.copy()
-    UD = deltaS.copy()
-    gS = np.ones_like(stackout)
-    gE = gS.copy()
-    gD = gS.copy()
-
-    # create the plot figure, if requested
-    if ploton:
-        import pylab as pl
-        from time import sleep
-
-        showplane = stack.shape[0]//2
-
-        fig = pl.figure(figsize=(20,5.5),num="Anisotropic diffusion")
-        ax1,ax2 = fig.add_subplot(1,2,1),fig.add_subplot(1,2,2)
-
-        ax1.imshow(stack[showplane,...].squeeze(),interpolation='nearest')
-        ih = ax2.imshow(stackout[showplane,...].squeeze(),interpolation='nearest',animated=True)
-        ax1.set_title("Original stack (Z = %i)" %showplane)
-        ax2.set_title("Iteration 0")
-
-        fig.canvas.draw()
-
-    for ii in range(niter):
-
-        # calculate the diffs
-        deltaD[:-1,: ,:  ] = np.diff(stackout,axis=0)
-        deltaS[:  ,:-1,: ] = np.diff(stackout,axis=1)
-        deltaE[:  ,: ,:-1] = np.diff(stackout,axis=2)
-
-        # conduction gradients (only need to compute one per dim!)
-        if option == 1:
-            gD = np.exp(-(deltaD/kappa)**2.)/step[0]
-            gS = np.exp(-(deltaS/kappa)**2.)/step[1]
-            gE = np.exp(-(deltaE/kappa)**2.)/step[2]
-        elif option == 2:
-            gD = 1./(1.+(deltaD/kappa)**2.)/step[0]
-            gS = 1./(1.+(deltaS/kappa)**2.)/step[1]
-            gE = 1./(1.+(deltaE/kappa)**2.)/step[2]
-
-        # update matrices
-        D = gD*deltaD
-        E = gE*deltaE
-        S = gS*deltaS
-
-        # subtract a copy that has been shifted 'Up/North/West' by one
-        # pixel. don't as questions. just do it. trust me.
-        UD[:] = D
-        NS[:] = S
-        EW[:] = E
-        UD[1:,: ,: ] -= D[:-1,:  ,:  ]
-        NS[: ,1:,: ] -= S[:  ,:-1,:  ]
-        EW[: ,: ,1:] -= E[:  ,:  ,:-1]
-
-        # update the image
-        stackout += gamma*(UD+NS+EW)
-
-        if ploton:
-            iterstring = "Iteration %i" %(ii+1)
-            ih.set_data(stackout[showplane,...].squeeze())
-            ax2.set_title(iterstring)
-            fig.canvas.draw()
-            # sleep(0.01)
-
-    return stackout
-
-def avg_pool_3d(arr, pool_size):
-    return uniform_filter(arr, size=pool_size, mode='nearest')
 def load_cropped_tiff_slices(tiff_directory, start_slice, end_slice, crop_start, crop_end):
     slices_data = []
     for slice_index in range(start_slice, end_slice):
-        tiff_filename = f"{slice_index:02d}.tif"
-        print(f"loading {slice_index}")
+        tiff_filename = f"{slice_index:05d}.tif"
         tiff_path = os.path.join(tiff_directory, tiff_filename)
         tiff_data = tifffile.memmap(tiff_path)
+        if tiff_data.dtype != np.uint8:
+            raise ValueError("invalid input dtype from tiff files, must be uint8")
         slices_data.append(tiff_data[crop_start[0]:crop_end[0], crop_start[1]:crop_end[1]])
     return slices_data
+
+
+
+def preprocess(chunk):
+    chunk = clip(chunk)
+    chunk = chunk.astype(np.float32)
+    chunk = (chunk - chunk.min()) / (chunk.max() - chunk.min())
+    #threshold = np.mean(chunk)/1.5
+    #mask = chunk < threshold
+    #chunk[mask] = 0
+    #chunk[~mask] -= threshold
+    chunk = global_local_contrast_3d(chunk)
+    #chunk = gaussian(chunk,sigma=1)
+    chunk = chunk.astype(np.float32)
+    chunk = (chunk - chunk.min()) / (chunk.max() - chunk.min())
+    chunk = np.rot90(chunk,k=3)
+    return chunk
 
 def process_chunk(tiff_directory, chunk_size, chunk_offset):
     start_slice = chunk_offset[2]
@@ -167,48 +114,42 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
 
     crop_start = (chunk_offset[0], chunk_offset[1])
     crop_end = (chunk_offset[0] + chunk_size[0], chunk_offset[1] + chunk_size[1])
-
+    print("getting tiff memmaps")
     slices_data = load_cropped_tiff_slices(tiff_directory, start_slice, end_slice, crop_start, crop_end)
-
-    # Convert slices_data to numpy array
+    print("stacking tiffs")
     combined_chunk = np.stack(slices_data, axis=-1)
-
-    # Perform data type scaling and conversion
-    if combined_chunk.dtype == np.uint16:
-        combined_chunk //= 256
-        combined_chunk = combined_chunk.astype(np.uint8)
-    elif combined_chunk.dtype == np.uint8:
-        pass
-    else:
-        raise ValueError("invalid input dtype from tiff files")
-
+    del slices_data
     print("preprocessing")
-    combined_chunk &= 0xff
-    combined_chunk = combined_chunk.astype(np.float32)
-    #combined_chunk = gaussian(combined_chunk)
-    #combined_chunk = exposure.equalize_adapthist(combined_chunk)
-    #combined_chunk = denoise_tv_chambolle(combined_chunk,weight=1)
-    #combined_chunk = (combined_chunk - combined_chunk.min()) / (combined_chunk.max() - combined_chunk.min())
-    #combined_chunk = block_reduce(combined_chunk,block_size=(8,8,1),func=np.sum)
-    #combined_chunk = avg_pool_3d(combined_chunk,(4,4,4))
+    combined_chunk = preprocess(combined_chunk)
+    print("superpixeling")
 
+
+    # Set SNIC parameters
+    d_seed = 5
+    compactness = 5.0
+    lowmid = 0.25
+    midhig = 0.75
+
+    # Call the SNIC function
+    neigh_overflow, labels, superpixels = snic.snic(combined_chunk, d_seed, compactness, lowmid, midhig)
+
+    print()
+
+    #combined_chunk = do_mask(combined_chunk,labels, superpixels, .5)
     combined_chunk = (combined_chunk - combined_chunk.min()) / (combined_chunk.max() - combined_chunk.min())
-    #combined_chunk = anisodiff3(combined_chunk)
 
-    p2, p98 = np.percentile(combined_chunk, (2, 98))
-    combined_chunk = exposure.rescale_intensity(combined_chunk, in_range=(p2, p98))
     print("marching cubes")
-    verts, faces, normals, values = measure.marching_cubes(combined_chunk, level=.5, allow_degenerate=False)
+    # verts, faces, normals, values = measure.marching_cubes(superpixel_values, level=.50, allow_degenerate=False)
+    verts, faces, normals, values = measure.marching_cubes(combined_chunk, level=.40, allow_degenerate=False)
+
     print("normalizing values")
     values = (values - values.min()) / (values.max() - values.min())
-    #values = exposure.equalize_adapthist(values)
-    #values = denoise_tv_chambolle(values)
-    #p2, p98 = np.percentile(values, (10, 90))
+    values = exposure.equalize_adapthist(values)
+    normals = exposure.equalize_adapthist(normals)
+    #values = gaussian(values,sigma=1)
+    #normals = gaussian(normals)
+    #p2, p98 = np.percentile(values, (3, 97))
     #values = exposure.rescale_intensity(values, in_range=(p2, p98))
-    #mask = values > .3
-    #values[mask] = 1.0
-    #mask = values < .3
-    #values[mask] = 0.0
     print("colorizing")
     colors = cm.get_cmap('viridis')(values)
     colors = (colors*256).astype(np.uint8)
@@ -216,15 +157,21 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
     print("writing to file")
     ply_filename = f"chunk_{chunk_offset[0]}_{chunk_offset[1]}_{chunk_offset[2]}_pool_{pool_size[0]}_{pool_size[1]}_{pool_size[2]}.ply"
     ply_path = os.path.join(output_directory, ply_filename)
+    verts = verts.astype(np.float16)
+    normals = normals.astype(np.float16)
     num_verts = len(verts)
     num_faces = len(faces)
-    with open(ply_path, 'w',buffering=1024*1024*128) as ply_file:
+
+    with open(ply_path, 'wt', buffering=1024 * 1024 * 128) as ply_file:
         ply_file.write("ply\n")
         ply_file.write("format ascii 1.0\n")
         ply_file.write(f"element vertex {num_verts}\n")
         ply_file.write("property float x\n")
         ply_file.write("property float y\n")
         ply_file.write("property float z\n")
+        ply_file.write("property float nx\n")
+        ply_file.write("property float ny\n")
+        ply_file.write("property float nz\n")
         ply_file.write("property uchar red\n")
         ply_file.write("property uchar green\n")
         ply_file.write("property uchar blue\n")
@@ -232,20 +179,19 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
         ply_file.write("property list uchar int vertex_index\n")
         ply_file.write("end_header\n")
 
-        chunk_size = 1000000
-        for i in range(0, num_verts, chunk_size):
-            chunk_verts = verts[i:i + chunk_size]
-            chunk_colors = colors[i:i + chunk_size]
-            vert_lines = [f"{v[0]} {v[1]} {v[2]} {c[0]} {c[1]} {c[2]}\n" for v, c in zip(chunk_verts, chunk_colors)]
-            ply_file.write(''.join(vert_lines))
+        vert_lines = [f"{v[0]} {v[1]} {v[2]} {n[0]} {n[1]} {n[2]} {c[0]} {c[1]} {c[2]}\n" for v, n, c in
+                      zip(verts, normals, colors)]
+        ply_file.writelines(vert_lines)
 
-        for i in range(0, num_faces, chunk_size):
-            chunk_faces = faces[i:i + chunk_size]
-            face_lines = [f"3 {f[0]} {f[1]} {f[2]}\n" for f in chunk_faces]
-            ply_file.write(''.join(face_lines))
+        #vert_lines = [f"{v[0]} {v[1]} {v[2]}  {c[0]} {c[1]} {c[2]}\n" for v,  c in
+        #              zip(verts,  colors)]
+        #ply_file.writelines(vert_lines)
+
+        face_lines = [f"3 {f[0]} {f[1]} {f[2]}\n" for f in faces]
+        ply_file.writelines(face_lines)
 
 
-def convert_to_8bit():
+def convert_to_8bit(tiff_directory):
     import os
     import tifffile
     from skimage import exposure
@@ -268,17 +214,106 @@ def convert_to_8bit():
 
             print(f"Processed: {tiff_file}")
 
-    # Specify the directory containing the TIFF stack
-    tiff_directory = r'C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\PHerc1667.volpkg\volumes\20231117161658'
-
     # Process the TIFF stack
     process_tiff_stack(tiff_directory)
 
+def do_sobel(path):
+
+    # Open the TIFF image
+    image = Image.open(path)
+
+    # Convert the image to a numpy array
+    image_array = np.array(image)
+
+    #vals, counts = np.unique(image_array, return_counts=True, )
+    #most_frequent = sorted(zip(vals, counts), key=lambda x: x[1], reverse=True)[0]
+    #threshold = most_frequent[0]
+    mask = image_array < 128
+    image_array[mask] = 0
+    mask = image_array >= 128
+    image_array[mask] -= 128
+    image_array *=2
+
+    # Apply the Sobel filter
+    image_array = gaussian(image_array, sigma=3)
+    sobel_x = ndimage.sobel(image_array, axis=0, mode='constant')
+    sobel_y = ndimage.sobel(image_array, axis=1, mode='constant')
+    sobel = np.hypot(sobel_x, sobel_y)
+    sobel = unsharp_mask(sobel, radius=2, amount=1)
+    sobel = unsharp_mask(sobel, radius=10, amount=1)
+
+
+    # Display the original and filtered images
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+
+    ax1.imshow(image, cmap='viridis')
+    ax1.set_title('Original Image')
+    ax1.axis('off')
+
+    ax2.imshow(sobel, cmap='viridis')
+    ax2.set_title('Sobel Filtered Image')
+    ax2.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+def do_clip(path):
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    # Open the TIFF image
+    image = Image.open(path)
+
+    # Convert the image to a numpy array
+    arr = np.array(image)
+
+    # Flatten the array to 1D for histogram calculation
+    flat_arr = arr.flatten()
+
+    # Calculate the histogram
+    hist, bins = np.histogram(flat_arr, bins=256, range=(0, 256))
+
+    # Calculate the cumulative sum of the histogram
+    cum_sum = np.cumsum(hist)
+
+    # Calculate the total number of pixels
+    total_pixels = flat_arr.shape[0]
+
+    # Calculate the indices corresponding to the middle 95% of values
+    lower_idx = np.argmax(cum_sum >= 0.025 * total_pixels)
+    upper_idx = np.argmax(cum_sum >= 0.975 * total_pixels)
+
+    # Cap off the bottom and top 2.5% of values
+    arr_capped = np.clip(arr, bins[lower_idx], bins[upper_idx])
+
+    # Rescale the capped array back to the full range of uint8
+    arr_rescaled = ((arr_capped - bins[lower_idx]) * 255 / (bins[upper_idx] - bins[lower_idx])).astype(np.uint8)
+
+    # Display the original and rescaled images
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4))
+    ax1.imshow(arr, cmap='gray')
+    ax1.set_title('Original Image')
+    ax1.axis('off')
+
+    ax2.imshow(arr_rescaled, cmap='gray')
+    ax2.set_title('Rescaled Image')
+    ax2.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
 if __name__ == '__main__':
-    tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\Scroll1.volpkg\paths\20231022170901\layers"
-    chunk_size = (1000, 1000, 65)
-    chunk_offset = (1000, 1000, 0)
+    tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\PHerc1667.volpkg\volumes\20231117161658"
+    #do_sobel("new-en.png")
+    #do_clip("new-en.png")
+    #exit(0)
+    #tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\Scroll1.volpkg\paths\20230929220926\layers"
+    chunk_size = (64, 64, 64)
+    chunk_offset = (2000, 2000, 2000)
     pool_size = (1, 1, 1)
+
+
+    #convert_to_8bit(tiff_directory)
 
     output_directory = "generated_ply"
     os.makedirs(output_directory, exist_ok=True)
