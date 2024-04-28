@@ -1,14 +1,8 @@
 import os
-import io
-import numpy as np
 import tifffile
 from skimage import measure, exposure
-from matplotlib import cm
-from skimage.restoration import denoise_tv_chambolle
 from skimage.filters import gaussian
 from skimage.measure import block_reduce
-from scipy.ndimage import uniform_filter
-from skimage import segmentation, filters
 from skimage.filters import unsharp_mask
 from glcae import global_local_contrast_3d
 import numpy as np
@@ -17,7 +11,6 @@ import matplotlib
 from PIL import Image
 from scipy import ndimage
 import snic
-import open3d as o3d
 
 def clip(chunk):
     flat_arr = chunk.flatten()
@@ -46,7 +39,6 @@ def do_mask(combined_chunk, labels, superpixels, threshold):
     masked_chunk = np.zeros_like(combined_chunk)
     masked_chunk[mask] = combined_chunk[mask]
     return masked_chunk
-
 
 
 def avg_pool_3d(input, pool_size, stride):
@@ -81,24 +73,18 @@ def load_cropped_tiff_slices(tiff_directory, start_slice, end_slice, crop_start,
     return slices_data
 
 
-
-def preprocess(chunk):
+def preprocess(chunk, pool_size):
     chunk = clip(chunk)
     chunk = chunk.astype(np.float32)
     chunk = (chunk - chunk.min()) / (chunk.max() - chunk.min())
-    chunk = block_reduce(chunk,(4,4,4),np.mean)
-    #threshold = np.mean(chunk)/1.5
-    #mask = chunk < threshold
-    #chunk[mask] = 0
-    #chunk[~mask] -= threshold
+    chunk = block_reduce(chunk,pool_size,np.mean)
     chunk = global_local_contrast_3d(chunk)
-    #chunk = gaussian(chunk,sigma=1)
     chunk = chunk.astype(np.float32)
     chunk = (chunk - chunk.min()) / (chunk.max() - chunk.min())
     chunk = np.rot90(chunk,k=3)
     return chunk
 
-def process_chunk(tiff_directory, chunk_size, chunk_offset):
+def process_chunk(tiff_directory, chunk_size, chunk_offset, pool_size):
     start_slice = chunk_offset[2]
     end_slice = start_slice + chunk_size[2]
 
@@ -108,23 +94,18 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
     slices_data = load_cropped_tiff_slices(tiff_directory, start_slice, end_slice, crop_start, crop_end)
     print("stacking tiffs")
     combined_chunk = np.stack(slices_data, axis=-1)
-    del slices_data
-
+    print("applying ink labels")
     combined_chunk = project_mask_to_volume("20230929220926_inklabels.png", combined_chunk, crop_start, 50)
 
-
     print("preprocessing")
-    combined_chunk = preprocess(combined_chunk)
+    combined_chunk = preprocess(combined_chunk, pool_size)
     print("superpixeling")
-
 
     # Set SNIC parameters
     d_seed = 15
     compactness = 1.0
     lowmid = 0.5
     midhig = 0.75
-
-    #combined_chunk *=256.0
 
     # Create a contiguous copy of combined_chunk
     #contig_chunk = np.ascontiguousarray(combined_chunk, dtype=np.float32)
@@ -141,13 +122,12 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
     #combined_chunk = (combined_chunk - combined_chunk.min()) / (combined_chunk.max() - combined_chunk.min())
 
     print("marching cubes")
-    # verts, faces, normals, values = measure.marching_cubes(superpixel_values, level=.50, allow_degenerate=False)
     verts, faces, normals, values = measure.marching_cubes(combined_chunk, level=.5, allow_degenerate=False)
 
     print("normalizing values")
     values = (values - values.min()) / (values.max() - values.min())
-    #values = exposure.equalize_adapthist(values)
-    #normals = exposure.equalize_adapthist(normals)
+    values = exposure.equalize_adapthist(values)
+    normals = exposure.equalize_adapthist(normals)
     #values = gaussian(values,sigma=1)
     #normals = gaussian(normals,sigma=1)
     #p2, p98 = np.percentile(values, (3, 97))
@@ -196,42 +176,28 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
 
 
 def project_mask_to_volume(mask_path, voxel_volume, crop_start, brightness_adjust):
-    # Set MAX_IMAGE_PIXELS to None to disable the decompression bomb check
     Image.MAX_IMAGE_PIXELS = None
 
-    # Load the 2D PNG mask and convert it to a binary mask
     mask = Image.open(mask_path).convert('L')
     mask = np.array(mask) > 0
 
-    # Crop the mask to match the chunk dimensions
     cropped_mask = mask[crop_start[0]:crop_start[0]+voxel_volume.shape[0],
                          crop_start[1]:crop_start[1]+voxel_volume.shape[1]]
 
-    # Create a 3D mask by repeating the cropped mask along the third axis
     mask_3d = np.repeat(cropped_mask[:, :, np.newaxis], voxel_volume.shape[2], axis=2)
 
-    # Create a copy of the voxel volume to store the modified values
     modified_volume = np.copy(voxel_volume)
 
-    # Add the constant value to the voxel values within the masked region
     modified_volume[mask_3d] = np.minimum(modified_volume[mask_3d] + brightness_adjust, 255)
 
     return modified_volume
 
 def convert_to_8bit(tiff_directory):
-    import os
-    import tifffile
-    from skimage import exposure
-    from skimage.restoration import denoise_tv_chambolle
-
     def process_tiff_stack(tiff_directory):
-        # Get a list of TIFF files in the directory
         tiff_files = [f for f in os.listdir(tiff_directory) if f.endswith('.tif')]
 
         for tiff_file in tiff_files:
             tiff_path = os.path.join(tiff_directory, tiff_file)
-
-            # Read the 16-bit unsigned TIFF image
             tiff_data = tifffile.imread(tiff_path)
             if tiff_data.dtype == np.uint8:
                 continue
@@ -240,43 +206,7 @@ def convert_to_8bit(tiff_directory):
             tifffile.imwrite(tiff_path, tiff_data)
 
             print(f"Processed: {tiff_file}")
-
-    # Process the TIFF stack
     process_tiff_stack(tiff_directory)
-
-def do_sobel(path):
-    image = Image.open(path)
-    image_array = np.array(image)
-
-    #vals, counts = np.unique(image_array, return_counts=True, )
-    #most_frequent = sorted(zip(vals, counts), key=lambda x: x[1], reverse=True)[0]
-    #threshold = most_frequent[0]
-    mask = image_array < 128
-    image_array[mask] = 0
-    mask = image_array >= 128
-    image_array[mask] -= 128
-    image_array *=2
-
-    image_array = gaussian(image_array, sigma=3)
-    sobel_x = ndimage.sobel(image_array, axis=0, mode='constant')
-    sobel_y = ndimage.sobel(image_array, axis=1, mode='constant')
-    sobel = np.hypot(sobel_x, sobel_y)
-    sobel = unsharp_mask(sobel, radius=2, amount=1)
-    sobel = unsharp_mask(sobel, radius=10, amount=1)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
-
-    ax1.imshow(image, cmap='viridis')
-    ax1.set_title('Original Image')
-    ax1.axis('off')
-
-    ax2.imshow(sobel, cmap='viridis')
-    ax2.set_title('Sobel Filtered Image')
-    ax2.axis('off')
-
-    plt.tight_layout()
-    plt.show()
-
 
 if __name__ == '__main__':
     #tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\PHerc1667.volpkg\volumes\20231117161658"
@@ -284,8 +214,8 @@ if __name__ == '__main__':
     #do_clip("new-en.png")
     #exit(0)
     tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\Scroll1.volpkg\paths\20230929220926\layers"
-    chunk_size = (2000, 2000, 65)
-    chunk_offset = (1200, 5000, 0)
+    chunk_size = (1000, 1000, 65)
+    chunk_offset = (1200, 4500, 0)
     pool_size = (1, 1, 1)
 
 
@@ -294,5 +224,5 @@ if __name__ == '__main__':
     output_directory = "generated_ply"
     os.makedirs(output_directory, exist_ok=True)
 
-    process_chunk(tiff_directory, chunk_size, chunk_offset)
+    process_chunk(tiff_directory, chunk_size, chunk_offset, pool_size)
     print("Processing completed.")
