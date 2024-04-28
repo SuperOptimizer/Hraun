@@ -254,7 +254,7 @@ SUPERPIXEL_MAX_NEIGHS = 56  # Replace with the actual value from your C code
 
 # Load the shared library
 if platform.system() == 'Windows':
-    asdf = subprocess.run(r"C:/w64devkit/bin/gcc snic.c -shared -o {}/snic.dll -g3".format(ROOTDIR).split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    asdf = subprocess.run(r"C:/w64devkit/bin/gcc snic.c -shared -o {}/snic.dll -O3 -g3".format(ROOTDIR).split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     print(asdf)
     snic_lib = ctypes.CDLL(f'{ROOTDIR}/snic.dll')
 else:

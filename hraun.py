@@ -13,31 +13,20 @@ from skimage.filters import unsharp_mask
 from glcae import global_local_contrast_3d
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
 from PIL import Image
 from scipy import ndimage
 import snic
+import open3d as o3d
 
 def clip(chunk):
-    # Flatten the array to 1D for histogram calculation
     flat_arr = chunk.flatten()
-
-    # Calculate the histogram
     hist, bins = np.histogram(flat_arr, bins=256, range=(0, 256))
-
-    # Calculate the cumulative sum of the histogram
     cum_sum = np.cumsum(hist)
-
-    # Calculate the total number of pixels
     total_pixels = flat_arr.shape[0]
-
-    # Calculate the indices corresponding to the middle 95% of values
     lower_idx = np.argmax(cum_sum >= 0.025 * total_pixels)
     upper_idx = np.argmax(cum_sum >= 0.975 * total_pixels)
-
-    # Cap off the bottom and top 2.5% of values
     arr_capped = np.clip(chunk, bins[lower_idx], bins[upper_idx])
-
-    # Rescale the capped array back to the full range of uint8
     arr_rescaled = ((arr_capped - bins[lower_idx]) * 255 / (bins[upper_idx] - bins[lower_idx])).astype(np.uint8)
     return arr_rescaled
 
@@ -83,7 +72,7 @@ def avg_pool_3d(input, pool_size, stride):
 def load_cropped_tiff_slices(tiff_directory, start_slice, end_slice, crop_start, crop_end):
     slices_data = []
     for slice_index in range(start_slice, end_slice):
-        tiff_filename = f"{slice_index:05d}.tif"
+        tiff_filename = f"{slice_index:02d}.tif"
         tiff_path = os.path.join(tiff_directory, tiff_filename)
         tiff_data = tifffile.memmap(tiff_path)
         if tiff_data.dtype != np.uint8:
@@ -97,6 +86,7 @@ def preprocess(chunk):
     chunk = clip(chunk)
     chunk = chunk.astype(np.float32)
     chunk = (chunk - chunk.min()) / (chunk.max() - chunk.min())
+    chunk = block_reduce(chunk,(4,4,4),np.mean)
     #threshold = np.mean(chunk)/1.5
     #mask = chunk < threshold
     #chunk[mask] = 0
@@ -119,53 +109,54 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
     print("stacking tiffs")
     combined_chunk = np.stack(slices_data, axis=-1)
     del slices_data
+
+    combined_chunk = project_mask_to_volume("20230929220926_inklabels.png", combined_chunk, crop_start, 50)
+
+
     print("preprocessing")
     combined_chunk = preprocess(combined_chunk)
     print("superpixeling")
 
 
     # Set SNIC parameters
-    d_seed = 20
-    compactness = 50.0
-    lowmid = 0.25
+    d_seed = 15
+    compactness = 1.0
+    lowmid = 0.5
     midhig = 0.75
 
     #combined_chunk *=256.0
 
-    # Call the SNIC function
-    print("combined_chunk shape:", combined_chunk.shape)
-    print("combined_chunk dtype:", combined_chunk.dtype)
-    print("combined_chunk flags:", combined_chunk.flags)
-
     # Create a contiguous copy of combined_chunk
-    contig_chunk = np.ascontiguousarray(combined_chunk, dtype=np.float32)
+    #contig_chunk = np.ascontiguousarray(combined_chunk, dtype=np.float32)
+    #contig_chunk *=256
+    #contig_chunk = contig_chunk.astype(np.uint8)
+    #contig_chunk *= 0xfe
+    #contig_chunk = contig_chunk.astype(np.float32)
+    #contig_chunk /=256.0
+    #neigh_overflow, labels, superpixels = snic.snic(contig_chunk, d_seed, compactness, lowmid, midhig)
 
-    print("combined_chunk shape after contiguous copy:", contig_chunk.shape)
-    print("combined_chunk dtype after contiguous copy:", contig_chunk.dtype)
-    print("combined_chunk flags after contiguous copy:", contig_chunk.flags)
+    print("masking")
 
-    neigh_overflow, labels, superpixels = snic.snic(contig_chunk, d_seed, compactness, lowmid, midhig)
-
-    print()
-
-    #combined_chunk = do_mask(combined_chunk,labels, superpixels, .5)
-    combined_chunk = (combined_chunk - combined_chunk.min()) / (combined_chunk.max() - combined_chunk.min())
+    #combined_chunk = do_mask(combined_chunk,labels, superpixels, .2)
+    #combined_chunk = (combined_chunk - combined_chunk.min()) / (combined_chunk.max() - combined_chunk.min())
 
     print("marching cubes")
     # verts, faces, normals, values = measure.marching_cubes(superpixel_values, level=.50, allow_degenerate=False)
-    verts, faces, normals, values = measure.marching_cubes(combined_chunk, level=.40, allow_degenerate=False)
+    verts, faces, normals, values = measure.marching_cubes(combined_chunk, level=.5, allow_degenerate=False)
 
     print("normalizing values")
     values = (values - values.min()) / (values.max() - values.min())
-    values = exposure.equalize_adapthist(values)
-    normals = exposure.equalize_adapthist(normals)
+    #values = exposure.equalize_adapthist(values)
+    #normals = exposure.equalize_adapthist(normals)
     #values = gaussian(values,sigma=1)
-    #normals = gaussian(normals)
+    #normals = gaussian(normals,sigma=1)
     #p2, p98 = np.percentile(values, (3, 97))
     #values = exposure.rescale_intensity(values, in_range=(p2, p98))
     print("colorizing")
-    colors = cm.get_cmap('viridis')(values)
+    colors = matplotlib.cm.get_cmap('viridis')(values)
     colors = (colors*256).astype(np.uint8)
+
+
 
     print("writing to file")
     ply_filename = f"chunk_{chunk_offset[0]}_{chunk_offset[1]}_{chunk_offset[2]}_pool_{pool_size[0]}_{pool_size[1]}_{pool_size[2]}.ply"
@@ -204,6 +195,29 @@ def process_chunk(tiff_directory, chunk_size, chunk_offset):
         ply_file.writelines(face_lines)
 
 
+def project_mask_to_volume(mask_path, voxel_volume, crop_start, brightness_adjust):
+    # Set MAX_IMAGE_PIXELS to None to disable the decompression bomb check
+    Image.MAX_IMAGE_PIXELS = None
+
+    # Load the 2D PNG mask and convert it to a binary mask
+    mask = Image.open(mask_path).convert('L')
+    mask = np.array(mask) > 0
+
+    # Crop the mask to match the chunk dimensions
+    cropped_mask = mask[crop_start[0]:crop_start[0]+voxel_volume.shape[0],
+                         crop_start[1]:crop_start[1]+voxel_volume.shape[1]]
+
+    # Create a 3D mask by repeating the cropped mask along the third axis
+    mask_3d = np.repeat(cropped_mask[:, :, np.newaxis], voxel_volume.shape[2], axis=2)
+
+    # Create a copy of the voxel volume to store the modified values
+    modified_volume = np.copy(voxel_volume)
+
+    # Add the constant value to the voxel values within the masked region
+    modified_volume[mask_3d] = np.minimum(modified_volume[mask_3d] + brightness_adjust, 255)
+
+    return modified_volume
+
 def convert_to_8bit(tiff_directory):
     import os
     import tifffile
@@ -231,11 +245,7 @@ def convert_to_8bit(tiff_directory):
     process_tiff_stack(tiff_directory)
 
 def do_sobel(path):
-
-    # Open the TIFF image
     image = Image.open(path)
-
-    # Convert the image to a numpy array
     image_array = np.array(image)
 
     #vals, counts = np.unique(image_array, return_counts=True, )
@@ -247,7 +257,6 @@ def do_sobel(path):
     image_array[mask] -= 128
     image_array *=2
 
-    # Apply the Sobel filter
     image_array = gaussian(image_array, sigma=3)
     sobel_x = ndimage.sobel(image_array, axis=0, mode='constant')
     sobel_y = ndimage.sobel(image_array, axis=1, mode='constant')
@@ -255,8 +264,6 @@ def do_sobel(path):
     sobel = unsharp_mask(sobel, radius=2, amount=1)
     sobel = unsharp_mask(sobel, radius=10, amount=1)
 
-
-    # Display the original and filtered images
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
 
     ax1.imshow(image, cmap='viridis')
@@ -270,59 +277,15 @@ def do_sobel(path):
     plt.tight_layout()
     plt.show()
 
-def do_clip(path):
-    import numpy as np
-    import matplotlib.pyplot as plt
-
-    # Open the TIFF image
-    image = Image.open(path)
-
-    # Convert the image to a numpy array
-    arr = np.array(image)
-
-    # Flatten the array to 1D for histogram calculation
-    flat_arr = arr.flatten()
-
-    # Calculate the histogram
-    hist, bins = np.histogram(flat_arr, bins=256, range=(0, 256))
-
-    # Calculate the cumulative sum of the histogram
-    cum_sum = np.cumsum(hist)
-
-    # Calculate the total number of pixels
-    total_pixels = flat_arr.shape[0]
-
-    # Calculate the indices corresponding to the middle 95% of values
-    lower_idx = np.argmax(cum_sum >= 0.025 * total_pixels)
-    upper_idx = np.argmax(cum_sum >= 0.975 * total_pixels)
-
-    # Cap off the bottom and top 2.5% of values
-    arr_capped = np.clip(arr, bins[lower_idx], bins[upper_idx])
-
-    # Rescale the capped array back to the full range of uint8
-    arr_rescaled = ((arr_capped - bins[lower_idx]) * 255 / (bins[upper_idx] - bins[lower_idx])).astype(np.uint8)
-
-    # Display the original and rescaled images
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4))
-    ax1.imshow(arr, cmap='gray')
-    ax1.set_title('Original Image')
-    ax1.axis('off')
-
-    ax2.imshow(arr_rescaled, cmap='gray')
-    ax2.set_title('Rescaled Image')
-    ax2.axis('off')
-
-    plt.tight_layout()
-    plt.show()
 
 if __name__ == '__main__':
-    tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\PHerc1667.volpkg\volumes\20231117161658"
+    #tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\PHerc1667.volpkg\volumes\20231117161658"
     #do_sobel("new-en.png")
     #do_clip("new-en.png")
     #exit(0)
-    #tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\Scroll1.volpkg\paths\20230929220926\layers"
-    chunk_size = (64, 64, 64)
-    chunk_offset = (2000, 2000, 2000)
+    tiff_directory = r"C:\Users\forrest\dev\Hraun\dl.ash2txt.org\full-scrolls\Scroll1.volpkg\paths\20230929220926\layers"
+    chunk_size = (2000, 2000, 65)
+    chunk_offset = (1200, 5000, 0)
     pool_size = (1, 1, 1)
 
 
