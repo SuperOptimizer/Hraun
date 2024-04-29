@@ -36,14 +36,6 @@ import subprocess
 ROOTDIR = os.path.dirname(os.path.abspath(__file__))
 SUPERPIXEL_MAX_NEIGHS = 56  # Replace with the actual value from your C code
 
-# Load the shared library
-if platform.system() == 'Windows':
-    asdf = subprocess.run(r"C:/w64devkit/bin/gcc snic.c -shared -o {}/snic.dll -O3 -g3".format(ROOTDIR).split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    print(asdf)
-    snic_lib = ctypes.CDLL(f'{ROOTDIR}/snic.dll')
-else:
-    snic_lib = ctypes.CDLL('path/to/libsnic.so')
-
 class Superpixel:
     def __init__(self):
         self.x = 0
@@ -70,31 +62,41 @@ class SuperpixelCType(ctypes.Structure):
         ('neighs', ctypes.c_uint * SUPERPIXEL_MAX_NEIGHS),
     ]
 
-# Define the data types for the C function arguments
-snic_lib.snic.argtypes = [
-    np.ctypeslib.ndpointer(dtype=np.float32),  # img
-    ctypes.c_int,  # lx
-    ctypes.c_int,  # ly
-    ctypes.c_int,  # lz
-    ctypes.c_int,  # d_seed
-    ctypes.c_float,  # compactness
-    ctypes.c_float,  # lowmid
-    ctypes.c_float,  # midhig
-    np.ctypeslib.ndpointer(dtype=np.uint32),  # labels
-    ctypes.POINTER(SuperpixelCType),  # superpixels
-]
-snic_lib.snic.restype = ctypes.c_int
-
-snic_lib.snic_superpixel_count.argtypes = [
-    ctypes.c_int,  # lx
-    ctypes.c_int,  # ly
-    ctypes.c_int,  # lz
-    ctypes.c_int,  # d_seed
-]
-snic_lib.snic_superpixel_count.restype = ctypes.c_int
 
 # Call the SNIC function from Python
 def snic(img, d_seed, compactness, lowmid, midhig):
+    # Load the shared library
+    if platform.system() == 'Windows':
+        asdf = subprocess.run(r"C:/w64devkit/bin/gcc snic.c -shared -o {}/snic.dll -O3 -g3".format(ROOTDIR).split(),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(asdf)
+        snic_lib = ctypes.CDLL(f'{ROOTDIR}/snic.dll')
+    else:
+        snic_lib = ctypes.CDLL('path/to/libsnic.so')
+
+    # Define the data types for the C function arguments
+    snic_lib.snic.argtypes = [
+        np.ctypeslib.ndpointer(dtype=np.float32),  # img
+        ctypes.c_int,  # lx
+        ctypes.c_int,  # ly
+        ctypes.c_int,  # lz
+        ctypes.c_int,  # d_seed
+        ctypes.c_float,  # compactness
+        ctypes.c_float,  # lowmid
+        ctypes.c_float,  # midhig
+        np.ctypeslib.ndpointer(dtype=np.uint32),  # labels
+        ctypes.POINTER(SuperpixelCType),  # superpixels
+    ]
+    snic_lib.snic.restype = ctypes.c_int
+
+    snic_lib.snic_superpixel_count.argtypes = [
+        ctypes.c_int,  # lx
+        ctypes.c_int,  # ly
+        ctypes.c_int,  # lz
+        ctypes.c_int,  # d_seed
+    ]
+    snic_lib.snic_superpixel_count.restype = ctypes.c_int
+
     img = np.ascontiguousarray(img, dtype=np.float32)
     lx, ly, lz = img.shape
     labels = np.zeros((lx, ly, lz), dtype=np.uint32)

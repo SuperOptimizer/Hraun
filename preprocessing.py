@@ -1,5 +1,7 @@
+from PIL import Image
+from scipy.optimize import minimize_scalar
 import numpy as np
-
+import cv2
 
 #https://github.com/awangenh/fastaniso
 def anisodiff3(stack,niter=1,kappa=50,gamma=0.1,step=(1.,1.,1.),option=1):
@@ -110,14 +112,6 @@ def anisodiff3(stack,niter=1,kappa=50,gamma=0.1,step=(1.,1.,1.),option=1):
 
     return stackout
 
-from scipy.optimize import minimize_scalar
-import numpy as np
-import cv2
-from PIL import Image
-from scipy.optimize import minimize_scalar
-import numpy as np
-import cv2
-import os
 
 
 #https://github.com/pengyan510/glcae/tree/master

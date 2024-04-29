@@ -1,6 +1,6 @@
-import requests
 import os
 import re
+import requests
 import tifffile
 import numpy as np
 

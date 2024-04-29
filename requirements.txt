@@ -1,0 +1,8 @@
+numpy
+matplotlib
+scikit-image
+tifffile
+opencv-python
+requests
+scipy
+pillow
