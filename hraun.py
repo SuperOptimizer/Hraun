@@ -10,22 +10,47 @@ import snic
 import volman
 import preprocessing
 
+def quantize(chunk, level):
+    if level == 7:
+        chunk &= 0xfe
+    if level == 6:
+        chunk &= 0xfc
+    if level == 5:
+        chunk &= 0xf8
+    if level == 4:
+        chunk &= 0xf0
+    if level == 3:
+        chunk &= 0xe0
+    if level == 2:
+        chunk &= 0xc0
+    if level == 1:
+        chunk &= 0x80
+    return chunk
 
 
+def superpixel(chunk):
+    contig_chunk = np.ascontiguousarray(chunk, dtype=np.float32)
+    neigh_overflow, labels, superpixels = snic.snic(contig_chunk, d_seed=5, compactness=10.0, lowmid=.25, midhig=.75)
 
+    print("superpixel masking")
+
+    #combined_chunk = do_mask(chunk,labels, superpixels, .2)
+    #combined_chunk = (combined_chunk - combined_chunk.min()) / (combined_chunk.max() - combined_chunk.min())
+    return chunk
 
 def preprocess(chunk, downsample):
     chunk = preprocessing.clip(chunk)
     chunk = chunk.astype(np.float32)
     chunk = (chunk - chunk.min()) / (chunk.max() - chunk.min())
-    chunk = block_reduce(chunk,(downsample,downsample,downsample),np.mean)
+    chunk = block_reduce(chunk, (downsample,downsample,downsample), np.mean)
     chunk = preprocessing.global_local_contrast_3d(chunk)
     chunk = chunk.astype(np.float32)
+    #chunk = preprocessing.avg_pool_3d(chunk, (2,2,2), 1)
     chunk = (chunk - chunk.min()) / (chunk.max() - chunk.min())
     chunk = np.rot90(chunk,k=3)
     return chunk
 
-def colorize(verts, faces, normals, values, colormap='viridis'):
+def colorize(verts, faces, normals, values, colormap):
     colors = matplotlib.cm.get_cmap(colormap)(values)
     colors = (colors * 256).astype(np.uint8)
     return colors
@@ -80,7 +105,7 @@ def main(scroll, source, idnum, chunk_size, chunk_offset, outdir,
          isolevel=0.5,
          postprocess_=True,
          colormap='viridis',
-         quantize=8):
+         quantize_=8):
 
     print("Stacking tiffs")
     vm = volman.VolMan('.')
@@ -88,30 +113,21 @@ def main(scroll, source, idnum, chunk_size, chunk_offset, outdir,
     ysize,xsize,zsize = chunk_size
     chunk = vm.chunk(scroll,source,idnum, yoff, xoff, zoff, ysize, xsize, zsize)
 
+    if quantize_ < 8:
+        print("quantizing")
+        chunk = quantize(chunk, quantize_)
+
     if inklabels_path:
         print("applying ink labels")
-        chunk = preprocessing.project_mask_to_volume("20230929220926_inklabels.png", chunk, (yoff,xoff), 0)
+        chunk = preprocessing.project_mask_to_volume("20230929220926_inklabels.png", chunk, (yoff,xoff), 50)
 
     if preprocess_:
         print("preprocessing")
         chunk = preprocess(chunk, downsample)
 
     if superpixel_:
-        print("superpixeling")
-
-        # Create a contiguous copy of combined_chunk
-        contig_chunk = np.ascontiguousarray(chunk, dtype=np.float32)
-        contig_chunk *=256
-        contig_chunk = contig_chunk.astype(np.uint8)
-        contig_chunk &= 0x80
-        contig_chunk = contig_chunk.astype(np.float32)
-        contig_chunk /=256.0
-        neigh_overflow, labels, superpixels = snic.snic(contig_chunk, d_seed=5, compactness=10.0, lowmid=.25, midhig=.75)
-
-        print("superpixel masking")
-
-        #combined_chunk = do_mask(combined_chunk,labels, superpixels, .2)
-        #combined_chunk = (combined_chunk - combined_chunk.min()) / (combined_chunk.max() - combined_chunk.min())
+        print("WARNING: superpixeling is not yet supported. skipping...")
+        #superpixel(chunk)
 
     print("marching cubes")
     if chunk.dtype != np.float32:
@@ -126,7 +142,7 @@ def main(scroll, source, idnum, chunk_size, chunk_offset, outdir,
     colors = colorize(verts, faces, normals, values, colormap)
 
     print("writing to file")
-    ply_filename = f"{scroll}_{source}_{idnum}_off_{yoff}x{xoff}x{zoff}_size_{ysize}x{xsize}x{zsize}_downsample_{downsample}_q{quantize}.ply"
+    ply_filename = f"{scroll}_{source}_{idnum}_off_{yoff}x{xoff}x{zoff}_size_{ysize}x{xsize}x{zsize}_downsample_{downsample}_q{quantize_}.ply"
     writeply(outdir, ply_filename, verts, normals, faces, colors)
 
 
@@ -134,5 +150,12 @@ if __name__ == '__main__':
     chunk_size = (500, 500, 65)
     chunk_offset = (4500, 1500, 0)
     outdir = "generated_ply"
+    #main('Scroll1', 'segments', '20230929220926', chunk_size, chunk_offset, outdir, quantize_=3,downsample=2)
 
-    main('Scroll1', 'segments', '20230929220926', chunk_size, chunk_offset, outdir,colormap='viridis',preprocess_=False,postprocess_=False)
+
+    chunk_size = (500, 500, 500)
+    chunk_offset = (1500, 1500, 1500)
+    outdir = "generated_ply"
+    #main('PHerc1667', 'volumes', '20231117161658', chunk_size, chunk_offset, outdir, quantize_=8,downsample=2)
+    #main('PHerc1667', 'volumes', '20231117161658', chunk_size, chunk_offset, outdir, quantize_=4,downsample=2)
+    main('PHerc1667', 'volumes', '20231117161658', chunk_size, chunk_offset, outdir, quantize_=3,downsample=2)
