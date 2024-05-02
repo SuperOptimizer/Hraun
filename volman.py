@@ -399,7 +399,7 @@ class VolMan:
     def _make_url(self,scroll,source,idnum,file=None):
         if source == 'segments':
             source = 'paths'
-        url = f'https://dl.ash2txt.org/full-scrolls/{scroll}.volpkg/{source}/{idnum}/'
+        url = f'http://dl.ash2txt.org/full-scrolls/{scroll}.volpkg/{source}/{idnum}/'
         if source == 'paths':
             url += 'layers/'
         if file is not None:
