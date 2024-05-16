@@ -2,6 +2,7 @@ import math
 import tifffile
 import numpy as np
 import cv2
+import cv2.optflow
 
 def calculate_angle(x1, y1, x2, y2, x3, y3):
     v1 = (x1 - x2, y1 - y2)
@@ -67,3 +68,56 @@ def unwrap_scroll(image_path):
             shifted_unwrapped[y, :len(data_pixels)] = data_pixels
 
     cv2.imwrite('unwrapped.tif', shifted_unwrapped)
+
+def snake():
+    import cv2
+    import numpy as np
+
+    # Load and preprocess the image
+    img = cv2.imread('01979.tif', cv2.IMREAD_GRAYSCALE)
+    img = cv2.GaussianBlur(img, (5, 5), 0)  # Apply Gaussian blur for smoothing
+
+    # Define the initial contour
+    initial_contour = np.array([[[1711,1223]], [[1653, 1366]], ])
+
+    # Set the optical flow parameters
+    flow_params = {
+        'alpha': 0.012,
+        'beta': 0.75,
+        'gamma': 0.5,
+        'delta': 0.25,
+        'sigma': 0.6,
+        'min_size': 10,
+        'num_inner_iter': 3,
+        'num_iter': 4
+    }
+
+    # Create a mask for the initial contour
+    mask = np.zeros_like(img)
+    cv2.drawContours(mask, [initial_contour.astype(int)], 0, 255, 1)
+
+    # Perform deep flow optical flow
+    flow = 	cv2.optflow.createOptFlow_DeepFlow()
+
+    contour = initial_contour.copy()
+    for _ in range(flow_params['num_iter']):
+        flow_field = flow.calc(img, img, None)
+        contour = np.round(contour + flow_field[contour[:, 0, 1].astype(int), contour[:, 0, 0].astype(int)]).astype(np.int32)
+
+    # Retrieve the final contour
+    final_contour = contour.reshape(-1, 2)
+
+    # Visualize the result
+    img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    cv2.drawContours(img_color, [final_contour.astype(int)], 0, (0, 255, 0), 2)
+    img_color = cv2.resize(img_color, (900,900))
+    cv2.imshow('Papyrus Scroll with Contour', img_color)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    #unwrap_scroll('./dl.ash2txt.org/full-scrolls/PHerc1667.volpkg/volumes/20231117161658/01000.tif')
+    #image = cv2.imread('./dl.ash2txt.org/full-scrolls/PHerc1667.volpkg/volumes/20231117161658/01000.tif')
+    import cv2
+    import numpy as np
+    snake()

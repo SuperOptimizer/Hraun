@@ -7,10 +7,14 @@ import numpy as np
 
 the_index = {
     'PHerc0332': {
-        'segments': [
-            '20231030220150',
-            '20231031231220'
-        ],
+        'segments': {
+            '20231030220150': {
+                'depth': 0
+            },
+            '20231031231220': {
+                'depth': 0
+            },
+        },
         'volumes': [
             '20231027191953',
             '20231117143551',
@@ -31,10 +35,10 @@ the_index = {
             '20240304141530',
             '20240304144030',
         ],
-        'volumes': [
-            '20231107190228',
-            '20231117161658'
-        ],
+        'volumes': {
+            '20231107190228': {},
+            '20231117161658': {'depth':11174},
+        },
         'volume_grids': [
             '20231107190228',
         ],
@@ -407,21 +411,9 @@ class VolMan:
         return url
 
     def _get_pad_and_len(self,scroll,source,idnum):
-        url = self._make_url(scroll,source,idnum)
+        depth = the_index[scroll][source][idnum]['depth']
+        return len(str(depth)), depth
 
-        user = os.environ['SCROLLPRIZE_USER']
-        password = os.environ['SCROLLPRIZE_PASS']
-
-        response = requests.get(url, auth=(user, password))
-
-        if response.status_code == 200:
-            pattern = r'<a href="([^"]+)">\1</a>'
-            filenames = re.findall(pattern, response.text)
-            if filenames[0] == '../':
-                filenames = filenames[1:]
-            return len(filenames[0].replace('.tif','')), len(filenames)
-        else:
-            raise ConnectionError("Failed to get pad length")
 
 
     def chunk(self, scroll, source, idnum, yoff=None, xoff=None, zoff=None, ysize=None, xsize=None, zsize=None, ychunk=None,xchunk=None,zchunk=None):

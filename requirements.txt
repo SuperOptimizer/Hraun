@@ -6,3 +6,7 @@ opencv-python
 requests
 scipy
 pillow
+opencv-contrib-python
+plotly
+dash
+dash_bootstrap_components
