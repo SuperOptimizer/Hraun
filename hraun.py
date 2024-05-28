@@ -12,13 +12,11 @@ from pyvistaqt import QtInteractor
 from skimage.exposure import equalize_adapthist
 from skimage.measure import label
 import vtk
-import multiprocessing as mp
-import concurrent.futures
 
 def rescale_array(arr):
     min_val = arr.min()
     max_val = arr.max()
-    rescaled_arr = (arr - min_val) / (max_val - min_val)
+    rescaled_arr = (arr - min_val) /  (max_val - min_val)
     return rescaled_arr
 
 class MainWindow(QMainWindow):
@@ -46,9 +44,8 @@ class MainWindow(QMainWindow):
         self.voxel_data = None
         self.mesh = None
         self.orig_colors = None
+        self.delete_mask = None
         self.selected_faces = []
-
-
 
     def keyPressEvent(self, event):
         pass
@@ -118,7 +115,6 @@ class MainWindow(QMainWindow):
         self.load_button.clicked.connect(self.load_voxel_data)
         self.control_layout.addWidget(self.load_button)
 
-        # Isolevel input box
         self.label_isolevel = QLabel("Isolevel:")
         self.control_layout.addWidget(self.label_isolevel)
 
@@ -126,7 +122,6 @@ class MainWindow(QMainWindow):
         self.isolevel_input.setFixedHeight(30)
         self.control_layout.addWidget(self.isolevel_input)
 
-        # Verso/Recto selector
         self.label_side = QLabel("Select Side:")
         self.control_layout.addWidget(self.label_side)
 
@@ -135,7 +130,6 @@ class MainWindow(QMainWindow):
         self.side_selector.setFixedHeight(30)
         self.control_layout.addWidget(self.side_selector)
 
-        # Segment number selector
         self.label_segment = QLabel("Segment Number:")
         self.control_layout.addWidget(self.label_segment)
 
@@ -144,13 +138,11 @@ class MainWindow(QMainWindow):
         self.segment_selector.setFixedHeight(30)
         self.control_layout.addWidget(self.segment_selector)
 
-        # Cell picking mode checkbox
         self.cell_picking_mode_checkbox = QCheckBox("Through Cell Picking Mode")
         self.cell_picking_mode_checkbox.setChecked(False)
         self.cell_picking_mode_checkbox.stateChanged.connect(self.toggle_cell_picking_mode)
         self.control_layout.addWidget(self.cell_picking_mode_checkbox)
 
-        # Save button
         self.save_button = QPushButton("Save Selected Faces")
         self.save_button.setFixedHeight(30)
         self.save_button.clicked.connect(self.save_selected_faces)
@@ -161,13 +153,11 @@ class MainWindow(QMainWindow):
         self.unselect_button.clicked.connect(self.unselect_all_faces)
         self.control_layout.addWidget(self.unselect_button)
 
-        # Delete button
         self.delete_button = QPushButton("Delete Selected Points")
         self.delete_button.setFixedHeight(30)
         self.delete_button.clicked.connect(self.delete_selected_points)
         self.control_layout.addWidget(self.delete_button)
 
-        # Add a button to trigger the bounding box creation
         self.bbox_button = QPushButton("Create Bounding Box")
         self.bbox_button.setFixedHeight(30)
         self.bbox_button.clicked.connect(self.create_closed_polygon)
@@ -175,19 +165,11 @@ class MainWindow(QMainWindow):
 
     def create_closed_polygon(self):
         if not self.selected_faces:
-            print("No faces selected for creating a closed polygon.")
             return
 
-        # Extract the coordinates of the selected points
         selected_points = np.array([coord for face in self.selected_faces for coord in face['coordinates']])
-
-        # Create a PolyData object from the selected points
         polygon = pv.PolyData(selected_points)
-
-        # Create a 3D convex hull from the polygon
         convex_hull = polygon.delaunay_3d()
-
-        # Create a new plotter for the convex hull
         self.plotter.add_mesh(convex_hull, color='blue', opacity=0.5)
         self.plotter.show()
 
@@ -230,6 +212,10 @@ class MainWindow(QMainWindow):
         volman = VolMan('D:/vesuvius.volman')
         self.voxel_data = volman.chunk(vol_id, vol_type, vol_timestamp, [dim_x, dim_y, dim_z],
                                        [chunk_x, chunk_y, chunk_z])
+
+        if self.delete_mask is not None:
+            self.voxel_data[self.delete_mask] = 0
+
         isolevel = int(self.isolevel_input.text())
 
         labels = label(self.voxel_data > isolevel)
@@ -239,41 +225,14 @@ class MainWindow(QMainWindow):
         print("Voxel data shape after reduction:", self.voxel_data.shape)
 
         print(f"Using isolevel: {isolevel}")
-
         verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel, allow_degenerate=False,
                                                                step_size=reduce)
         values = rescale_array(values)
         values = equalize_adapthist(values)
         print("Marching cubes completed successfully.")
 
-        polydata = vtk.vtkPolyData()
-        points = vtk.vtkPoints()
-        for vert in verts:
-            points.InsertNextPoint(vert)
-        polydata.SetPoints(points)
-
-        cells = vtk.vtkCellArray()
-        for face in faces:
-            triangle = vtk.vtkTriangle()
-            triangle.GetPointIds().SetId(0, face[0])
-            triangle.GetPointIds().SetId(1, face[1])
-            triangle.GetPointIds().SetId(2, face[2])
-            cells.InsertNextCell(triangle)
-        polydata.SetPolys(cells)
-
-        normals_array = vtk.vtkFloatArray()
-        normals_array.SetNumberOfComponents(3)
-        for normal in normals:
-            normals_array.InsertNextTuple(normal)
-        polydata.GetPointData().SetNormals(normals_array)
-
-        stripper = vtk.vtkStripper()
-        stripper.SetInputData(polydata)
-        stripper.Update()
-
-        strips = stripper.GetOutput()
-
-        self.mesh = pv.wrap(strips)
+        faces = np.hstack([[3] + list(face) for face in faces])
+        self.mesh = pv.PolyData(verts, faces)
         print("PyVista mesh created")
 
         self.mesh["values"] = values
@@ -299,25 +258,16 @@ class MainWindow(QMainWindow):
     def pick_callback(self, picked_cells):
         if picked_cells is None:
             return
-        cell_ids = picked_cells.cell_data['vtkOriginalCellIds']
+        if 'vtkOriginalCellIds' in picked_cells.cell_data.keys():
+            cell_ids = picked_cells.cell_data['vtkOriginalCellIds']
+            print()
+        else:
+            cell_ids = picked_cells.cell_data['orig_extract_id']
 
         for cell_id in cell_ids:
             cell = self.mesh.get_cell(cell_id)
             point_ids = cell.point_ids
-
-            for point_id in point_ids:
-                color = [255,0,0] if self.side_selector.currentText() == 'Verso' else [0,255,0]
-                self.mesh.point_data["colors"][point_id] = color
-
-            side = self.side_selector.currentText()
-            segment = self.segment_selector.currentText()
-            face_data = {
-                "cell_id": cell_id,
-                "side": side,
-                "segment": segment,
-                "coordinates": [self.mesh.points[pid] for pid in point_ids]
-            }
-            self.selected_faces.append(face_data)
+            self.selected_faces.append([self.mesh.points[pid] for pid in point_ids])
 
         self.plotter.update()
 
@@ -325,51 +275,40 @@ class MainWindow(QMainWindow):
         if not self.selected_faces:
             print("No faces selected for deletion.")
             return
+        if not self.cell_picking_mode_checkbox.isChecked():
+            raise ValueError("point deletion only supported for through cell picking mode")
+        selected_points = np.array([coord for face in self.selected_faces for coord in face])
+        min_coords = np.min(selected_points, axis=0)
+        max_coords = np.max(selected_points, axis=0)
 
-        try:
-            # Convert selected coordinates to voxel space and zero out the voxel values
-            for face in self.selected_faces:
-                for coord in face['coordinates']:
-                    voxel_coord = self.convert_to_voxel_space(coord)
-                    voxel_x, voxel_y, voxel_z = voxel_coord
-                    if 0 <= voxel_x < self.voxel_data.shape[0] and 0 <= voxel_y < self.voxel_data.shape[
-                        1] and 0 <= voxel_z < self.voxel_data.shape[2]:
-                        self.voxel_data[voxel_coord] = 0
+        delete_mask = np.zeros_like(self.voxel_data, dtype=bool)
 
-            # Regenerate the mesh using marching cubes
-            isolevel = int(self.isolevel_input.text())
-            verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel)
-            values = rescale_array(values)
-            values = equalize_adapthist(values)
+        for i in range(self.voxel_data.shape[0]):
+            for j in range(self.voxel_data.shape[1]):
+                for k in range(self.voxel_data.shape[2]):
+                    voxel_coord = (i, j, k)
+                    world_coord = self.mesh.bounds[0] + i * (self.mesh.bounds[1] - self.mesh.bounds[0]) / \
+                                  self.voxel_data.shape[0], \
+                                  self.mesh.bounds[2] + j * (self.mesh.bounds[3] - self.mesh.bounds[2]) / \
+                                  self.voxel_data.shape[1], \
+                                  self.mesh.bounds[4] + k * (self.mesh.bounds[5] - self.mesh.bounds[4]) / \
+                                  self.voxel_data.shape[2]
 
-            faces = np.hstack([[3] + list(face) for face in faces])
-            self.mesh = pv.PolyData(verts, faces)
-            self.mesh["values"] = values
+                    if np.all(min_coords <= world_coord) and np.all(world_coord <= max_coords):
+                        delete_mask[voxel_coord] = True
 
-            # Update colors
-            cmap = plt.get_cmap("viridis")
-            colors = cmap(values / values.max())
-            colors = (colors[:, :3] * 255).astype(np.uint8)
-            self.mesh.point_data["colors"] = colors
-
-            # Update the plotter
-            self.plotter.clear()
-            self.plotter.add_mesh(self.mesh, scalars="colors", rgb=True, show_scalar_bar=False, opacity="linear")
-            self.plotter.show_axes()
-            self.selected_faces.clear()
-            self.plotter.update()
-
-            print("Selected points and faces deleted.")
-        except Exception as e:
-            print("Exception in delete_selected_points:", e)
+        self.delete_mask = delete_mask
+        self.selected_faces.clear()
+        self.load_voxel_data()
 
     def save_selected_faces(self):
+        side = self.side_selector.currentText()
+        segment = self.segment_selector.currentText()
         with open("selected_faces.txt", "w") as f:
             for face in self.selected_faces:
-                f.write(f"Cell ID: {face['cell_id']}\n")
-                f.write(f"Side: {face['side']}\n")
-                f.write(f"Segment: {face['segment']}\n")
-                f.write(f"Coordinates: {face['coordinates']}\n\n")
+                f.write(f"Side: {side}\n")
+                f.write(f"Segment: {segment}\n")
+                f.write(f"Coordinates: {face}\n\n")
         print("Selected faces saved to selected_faces.txt")
 
 
