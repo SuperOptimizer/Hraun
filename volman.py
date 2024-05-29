@@ -396,6 +396,59 @@ class VolMan:
         depth = the_index[scroll][source][idnum]['depth']
         return len(str(depth)), depth
 
+    def get_mask(self, scroll, source, idnum, start, size):
+        """ a mask is a segmentation mask, where we label each pixel* in the volume
+            as belonging to one of 65536 unique segments.
+            0 indicates that there is no papyrus
+            65535 indicates papyrus of an indeterminate segment label
+            1-65534 are unique segment labels """
+        zoff, yoff, xoff = start
+        zsize, ysize, xsize = size
+
+        start = zoff
+        end = zoff + zsize
+
+        padlen, numtiffs = self._get_pad_and_len(scroll, source, idnum)
+        if start > numtiffs or end > numtiffs:
+            raise ValueError(
+                f'start:{start} or end:{end} is greater than {numtiffs} tiffs in {scroll}/{source}/{idnum}')
+
+        mask_path = f'{self.cachedir}/{scroll}/{source}/{idnum}_masks'
+
+        mask_data = []
+        for idx in range(start, end):
+            filename = f"{idx:0{padlen}d}.tif"
+            mask_file = os.path.join(mask_path, filename)
+
+            full_mask_slice = tifffile.memmap(mask_file)
+            mask_slice = full_mask_slice[yoff:yoff + ysize, xoff:xoff + xsize]
+            mask_data.append(mask_slice)
+
+        mask_data = np.stack(mask_data, axis=0)
+        return mask_data
+
+    def set_mask(self, scroll, source, idnum, start, mask):
+        zoff, yoff, xoff = start
+        zsize, ysize, xsize = mask.shape
+
+        start = zoff
+        end = zoff + zsize
+
+        padlen, numtiffs = self._get_pad_and_len(scroll, source, idnum)
+        if start > numtiffs or end > numtiffs:
+            raise ValueError(
+                f'start:{start} or end:{end} is greater than {numtiffs} tiffs in {scroll}/{source}/{idnum}')
+
+        mask_path = f'{self.cachedir}/{scroll}/{source}/{idnum}_masks'
+
+        for idx in range(start, end):
+            filename = f"{idx:0{padlen}d}.tif"
+            mask_file = os.path.join(mask_path, filename)
+
+            full_mask_slice = tifffile.memmap(mask_file)
+            full_mask_slice[yoff:yoff + ysize, xoff:xoff + xsize] = mask[idx - start]
+            #tifffile.imwrite(mask_file, full_mask_slice)
+
     def chunk(self, scroll, source, idnum, start, size):
         ''' get a 3d chunk of data. Download the sources if necessary, otherwise pull them from the cache directory'''
 
@@ -408,16 +461,17 @@ class VolMan:
             raise ValueError(f'{source} is not a valid source')
         if idnum not in the_index[scroll][source]:
             raise ValueError(f'{idnum} is not a valid id for {source} in {scroll}')
-        elif source in ['segments','volumes']:
+        elif source in ['segments', 'volumes']:
 
-            zoff,yoff,xoff = start
-            zsize,ysize,xsize = size
+            zoff, yoff, xoff = start
+            zsize, ysize, xsize = size
 
             start = zoff
             end = start + zsize
-            padlen, numtiffs = self._get_pad_and_len(scroll,source,idnum)
+            padlen, numtiffs = self._get_pad_and_len(scroll, source, idnum)
             if start > numtiffs or end > numtiffs:
-                raise ValueError(f'start:{start} or end:{end} is greater than {numtiffs} tiffs in {scroll}/{source}/{idnum}')
+                raise ValueError(
+                    f'start:{start} or end:{end} is greater than {numtiffs} tiffs in {scroll}/{source}/{idnum}')
             dl_path = f'{self.cachedir}/{scroll}/{source}/{idnum}'
 
             def download_file(idx, start, end, padlen, scroll, source, idnum, dl_path, user, password):
@@ -455,9 +509,23 @@ class VolMan:
 
                 concurrent.futures.wait(futures)
             crop_start = (yoff, xoff)
-            crop_end = (yoff + ysize, xoff+ xsize)
+            crop_end = (yoff + ysize, xoff + xsize)
             data = load_cropped_tiff_slices(dl_path, start, end, crop_start, crop_end, padlen)
             data = np.stack(data, axis=0)
+
+            # Check for the existence of mask files and create them if they don't exist
+            mask_path = f'{self.cachedir}/{scroll}/{source}/{idnum}_masks'
+            os.makedirs(mask_path, exist_ok=True)
+
+            for idx in range(start, end):
+                filename = f"{idx:0{padlen}d}.tif"
+                mask_file = os.path.join(mask_path, filename)
+
+                if not os.path.exists(mask_file):
+                    print(f"creating mask {mask_file}")
+                    mask_slice = np.zeros_like(tifffile.memmap(os.path.join(dl_path, filename)), dtype=np.uint16)
+                    tifffile.imwrite(mask_file, mask_slice)
+
             return data
 
 

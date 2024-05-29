@@ -23,7 +23,7 @@ class MainWindow(QMainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
 
-        self.setWindowTitle("Voxel Data Visualization")
+        self.setWindowTitle("Hraun 3D Visualizer and Segmenter")
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.setCentralWidget(self.splitter)
@@ -37,7 +37,24 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(self.plotter.interactor)
 
         self.splitter.setStretchFactor(1, 1)
-
+        self.control_panel.setStyleSheet("""
+                    QLabel {
+                        font-size: 16px;
+                    }
+                    QLineEdit {
+                        font-size: 16px;
+                    }
+                    QPushButton {
+                        font-size: 16px;
+                    }
+                    QComboBox {
+                        font-size: 16px;
+                    }
+                    QCheckBox {
+                        font-size: 16px;
+                    }
+                """)
+        
         self.init_params_ui()
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
@@ -46,6 +63,8 @@ class MainWindow(QMainWindow):
         self.orig_colors = None
         self.delete_mask = None
         self.selected_faces = []
+
+        self.volman = VolMan('D:/vesuvius.volman')
 
     def keyPressEvent(self, event):
         pass
@@ -56,62 +75,49 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(self.label_vol)
 
         self.vol_id = QLineEdit("PHerc1667")
-        self.vol_id.setFixedHeight(30)
         self.control_layout.addWidget(self.vol_id)
 
         self.label_type = QLabel("Type:")
         self.control_layout.addWidget(self.label_type)
 
         self.vol_type = QLineEdit("volumes")
-        self.vol_type.setFixedHeight(30)
         self.control_layout.addWidget(self.vol_type)
 
         self.label_timestamp = QLabel("Timestamp:")
         self.control_layout.addWidget(self.label_timestamp)
 
         self.vol_timestamp = QLineEdit("20231107190228")
-        self.vol_timestamp.setFixedHeight(30)
         self.control_layout.addWidget(self.vol_timestamp)
 
-        self.label_dim = QLabel("Dimensions (z,y,c):")
+        self.label_dim = QLabel("Dimensions (z,y,x):")
         self.control_layout.addWidget(self.label_dim)
 
+        self.dim_z = QLineEdit("4000")
+        self.control_layout.addWidget(self.dim_z)
+        self.dim_y = QLineEdit("4000")
+        self.control_layout.addWidget(self.dim_y)
         self.dim_x = QLineEdit("4000")
-        self.dim_x.setFixedHeight(30)
         self.control_layout.addWidget(self.dim_x)
 
-        self.dim_y = QLineEdit("4000")
-        self.dim_y.setFixedHeight(30)
-        self.control_layout.addWidget(self.dim_y)
-
-        self.dim_z = QLineEdit("4000")
-        self.dim_z.setFixedHeight(30)
-        self.control_layout.addWidget(self.dim_z)
-
-        self.label_chunk = QLabel("Chunk size (x,y,z):")
+        self.label_chunk = QLabel("Chunk size (z,y,x):")
         self.control_layout.addWidget(self.label_chunk)
 
+        self.chunk_z = QLineEdit("128")
+        self.control_layout.addWidget(self.chunk_z)
+        self.chunk_y = QLineEdit("128")
+        self.control_layout.addWidget(self.chunk_y)
         self.chunk_x = QLineEdit("128")
         self.chunk_x.setFixedHeight(30)
         self.control_layout.addWidget(self.chunk_x)
 
-        self.chunk_y = QLineEdit("128")
-        self.chunk_y.setFixedHeight(30)
-        self.control_layout.addWidget(self.chunk_y)
-
-        self.chunk_z = QLineEdit("128")
-        self.chunk_z.setFixedHeight(30)
-        self.control_layout.addWidget(self.chunk_z)
 
         self.label_block_size = QLabel("Reduce Block size multiplier:")
         self.control_layout.addWidget(self.label_block_size)
 
         self.block_reduce = QLineEdit("1")
-        self.block_reduce.setFixedHeight(30)
         self.control_layout.addWidget(self.block_reduce)
 
         self.load_button = QPushButton("Load Data")
-        self.load_button.setFixedHeight(30)
         self.load_button.clicked.connect(self.load_voxel_data)
         self.control_layout.addWidget(self.load_button)
 
@@ -119,7 +125,6 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(self.label_isolevel)
 
         self.isolevel_input = QLineEdit("100")
-        self.isolevel_input.setFixedHeight(30)
         self.control_layout.addWidget(self.isolevel_input)
 
         self.label_side = QLabel("Select Side:")
@@ -127,51 +132,50 @@ class MainWindow(QMainWindow):
 
         self.side_selector = QComboBox()
         self.side_selector.addItems(["Verso", "Recto"])
-        self.side_selector.setFixedHeight(30)
         self.control_layout.addWidget(self.side_selector)
 
         self.label_segment = QLabel("Segment Number:")
         self.control_layout.addWidget(self.label_segment)
 
-        self.segment_selector = QComboBox()
-        self.segment_selector.addItems([str(i) for i in range(10)])
-        self.segment_selector.setFixedHeight(30)
-        self.control_layout.addWidget(self.segment_selector)
+        self.segment_input = QLineEdit("0")
+        self.control_layout.addWidget(self.segment_input)
 
         self.cell_picking_mode_checkbox = QCheckBox("Through Cell Picking Mode")
         self.cell_picking_mode_checkbox.setChecked(False)
         self.cell_picking_mode_checkbox.stateChanged.connect(self.toggle_cell_picking_mode)
         self.control_layout.addWidget(self.cell_picking_mode_checkbox)
 
-        self.save_button = QPushButton("Save Selected Faces")
-        self.save_button.setFixedHeight(30)
-        self.save_button.clicked.connect(self.save_selected_faces)
-        self.control_layout.addWidget(self.save_button)
+        self.save_volume_button = QPushButton("Save Selected Volume")
+        self.save_volume_button.clicked.connect(self.save_selected_volume)
+        self.control_layout.addWidget(self.save_volume_button)
 
         self.unselect_button = QPushButton("Unselect All Faces")
-        self.unselect_button.setFixedHeight(30)
         self.unselect_button.clicked.connect(self.unselect_all_faces)
         self.control_layout.addWidget(self.unselect_button)
 
         self.delete_button = QPushButton("Delete Selected Points")
-        self.delete_button.setFixedHeight(30)
         self.delete_button.clicked.connect(self.delete_selected_points)
         self.control_layout.addWidget(self.delete_button)
 
         self.bbox_button = QPushButton("Create Bounding Box")
-        self.bbox_button.setFixedHeight(30)
         self.bbox_button.clicked.connect(self.create_closed_polygon)
         self.control_layout.addWidget(self.bbox_button)
 
+        self.apply_mask_button = QPushButton("Apply Mask")
+        self.apply_mask_button.clicked.connect(self.apply_mask)
+        self.control_layout.addWidget(self.apply_mask_button)
+
     def create_closed_polygon(self):
         if not self.selected_faces:
-            return
+            return None
 
-        selected_points = np.array([coord for face in self.selected_faces for coord in face['coordinates']])
+        selected_points = np.array([coord for face in self.selected_faces for coord in face])
         polygon = pv.PolyData(selected_points)
         convex_hull = polygon.delaunay_3d()
-        self.plotter.add_mesh(convex_hull, color='blue', opacity=0.5)
+        self.plotter.add_mesh(convex_hull, color='blue', opacity=1)
         self.plotter.show()
+
+        return convex_hull
 
     def convert_to_voxel_space(self, coord):
         x, y, z = coord
@@ -185,7 +189,7 @@ class MainWindow(QMainWindow):
 
     def toggle_cell_picking_mode(self, state):
         self.plotter.enable_cell_picking(callback=self.pick_callback, show_message=True, color='red', point_size=10,
-                                             through=state == Qt.Checked)
+                                             through=state == Qt.Checked,style='wireframe')
 
     def unselect_all_faces(self):
         print("unselecting not totally working yet")
@@ -209,9 +213,8 @@ class MainWindow(QMainWindow):
         chunk_z = int(self.chunk_z.text())
         reduce = int(self.block_reduce.text())
         print("Chunking")
-        volman = VolMan('D:/vesuvius.volman')
-        self.voxel_data = volman.chunk(vol_id, vol_type, vol_timestamp, [dim_x, dim_y, dim_z],
-                                       [chunk_x, chunk_y, chunk_z])
+        self.voxel_data = self.volman.chunk(vol_id, vol_type, vol_timestamp, [dim_z, dim_y, dim_x],
+                                       [chunk_z, chunk_y, chunk_x])
 
         if self.delete_mask is not None:
             self.voxel_data[self.delete_mask] = 0
@@ -234,7 +237,6 @@ class MainWindow(QMainWindow):
         faces = np.hstack([[3] + list(face) for face in faces])
         self.mesh = pv.PolyData(verts, faces)
         print("PyVista mesh created")
-
         self.mesh["values"] = values
         print('Colorizing')
         cmap = plt.get_cmap("viridis")
@@ -244,14 +246,30 @@ class MainWindow(QMainWindow):
         print('Adding mesh')
         self.plotter.clear()
         self.plotter.add_mesh(self.mesh, scalars="colors", rgb=True, show_scalar_bar=True, opacity="linear",
-                              render_points_as_spheres=False, lighting=True, ambient=0.8, specular=0.6)
+                              render_points_as_spheres=False, lighting=True, ambient=0.7, specular=0.4, diffuse=.4)
 
-        light = pv.Light(position=(0, 0, 10), focal_point=(0, 0, 0), color='white', intensity=0.8)
-        self.plotter.add_light(light)
+        light1 = pv.Light(position=(1, 1, 1), focal_point=(0, 0, 0), color='white', intensity=0.8)
+        light2 = pv.Light(position=(-1, -1, -1), focal_point=(0, 0, 0), color='white', intensity=0.8)
+        light3 = pv.Light(position=(1, -1, -1), focal_point=(0, 0, 0), color='white', intensity=0.8)
+        light4 = pv.Light(position=(-1, 1, -1), focal_point=(0, 0, 0), color='white', intensity=0.8)
+        light5 = pv.Light(position=(-1, -1, 1), focal_point=(0, 0, 0), color='white', intensity=0.8)
+        light6 = pv.Light(position=(1, -1, 1), focal_point=(0, 0, 0), color='white', intensity=0.8)
+        light7 = pv.Light(position=(1, 1, -1), focal_point=(0, 0, 0), color='white', intensity=0.8)
+        light8 = pv.Light(position=(-1, 1, 1), focal_point=(0, 0, 0), color='white', intensity=0.8)
+        self.plotter.add_light(light1)
+        self.plotter.add_light(light2)
+        self.plotter.add_light(light3)
+        self.plotter.add_light(light4)
+        self.plotter.add_light(light5)
+        self.plotter.add_light(light6)
+        self.plotter.add_light(light7)
+        self.plotter.add_light(light8)
+        self.plotter.enable_shadows()
+        self.plotter.enable_ssao()
 
         through_mode = self.cell_picking_mode_checkbox.isChecked()
         self.plotter.enable_cell_picking(callback=self.pick_callback, show_message=True, color='red', line_width=10,
-                                         through=through_mode)
+                                         through=through_mode,style='wireframe')
         print("Showing mesh")
         self.plotter.show()
 
@@ -301,15 +319,75 @@ class MainWindow(QMainWindow):
         self.selected_faces.clear()
         self.load_voxel_data()
 
-    def save_selected_faces(self):
+    def save_selected_volume(self):
         side = self.side_selector.currentText()
-        segment = self.segment_selector.currentText()
-        with open("selected_faces.txt", "w") as f:
-            for face in self.selected_faces:
-                f.write(f"Side: {side}\n")
-                f.write(f"Segment: {segment}\n")
-                f.write(f"Coordinates: {face}\n\n")
-        print("Selected faces saved to selected_faces.txt")
+        segment = int(self.segment_input.text())
+        if segment < 1 or segment > 65535:
+            raise ValueError("Segment must be between 0 and 65535")
+
+        if not self.selected_faces:
+            print("No faces selected for saving.")
+            return
+        if not self.cell_picking_mode_checkbox.isChecked():
+            raise ValueError("Volume saving only supported for through cell picking mode")
+
+        save_mask = np.zeros_like(self.voxel_data, dtype=np.uint16)
+
+        # Iterate over the selected faces
+        for face in self.selected_faces:
+            for coord in face:
+                # Convert the face coordinate to voxel space
+                voxel_coord = self.convert_to_voxel_space(coord)
+
+                # Check if the voxel coordinate is within the valid range
+                if all(0 <= c < d for c, d in zip(voxel_coord, self.voxel_data.shape)):
+                    # Set the corresponding voxel in the save_mask to the segment number
+                    save_mask[voxel_coord] = segment
+
+        # Load the existing mask for the corresponding chunk using get_mask
+        vol_id = self.vol_id.text()
+        vol_type = self.vol_type.text()
+        vol_timestamp = self.vol_timestamp.text()
+        start_z = int(self.dim_z.text())
+        start_y = int(self.dim_y.text())
+        start_x = int(self.dim_x.text())
+        chunk_z = int(self.chunk_z.text())
+        chunk_y = int(self.chunk_y.text())
+        chunk_x = int(self.chunk_x.text())
+        existing_mask = self.volman.get_mask(vol_id, vol_type, vol_timestamp, [start_z, start_y, start_x],
+                                             [chunk_z, chunk_y, chunk_x])
+
+        # Combine the existing mask with the save mask, preserving existing non-zero values
+        combined_mask = np.where((save_mask != 0) & (existing_mask == 0), save_mask, existing_mask)
+
+        # Save the combined mask for the corresponding chunk using set_mask
+        self.volman.set_mask(vol_id, vol_type, vol_timestamp, [start_z, start_y, start_x], combined_mask)
+
+        print(f"Selected faces saved as segment {segment} for side {side}")
+
+    def apply_mask(self):
+        segment = int(self.segment_input.text())
+        if segment < 0 or segment > 65535:
+            raise ValueError("Segment must be between 0 and 65535")
+
+        # Load the mask for the current chunk using get_mask
+        vol_id = self.vol_id.text()
+        vol_type = self.vol_type.text()
+        vol_timestamp = self.vol_timestamp.text()
+        start_z = int(self.dim_z.text())
+        start_y = int(self.dim_y.text())
+        start_x = int(self.dim_x.text())
+        chunk_z = int(self.chunk_z.text())
+        chunk_y = int(self.chunk_y.text())
+        chunk_x = int(self.chunk_x.text())
+        mask = self.volman.get_mask(vol_id, vol_type, vol_timestamp, [start_z, start_y, start_x],
+                                    [chunk_z, chunk_y, chunk_x])
+
+        # Apply the mask to the voxel data
+        self.voxel_data[mask != segment] = 0
+
+        # Re-render the volume
+        self.load_voxel_data()
 
 
 if __name__ == "__main__":
@@ -317,3 +395,4 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+
