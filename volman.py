@@ -87,22 +87,23 @@ class VolMan:
         ext = the_index[scroll][id]['ext']
 
         for x in range(start, end):
-            filename = f"{x:0{len(str(depth))}d}.{ext}"
-            if os.path.exists(f'{self.cachedir}/{scroll}/{id}/{filename}'):
+            src_filename = f"{x:0{len(str(depth))}d}.{ext}"
+
+            dst_filename = f"{x:0{len(str(depth))}d}.tif"
+            if os.path.exists(f'{self.cachedir}/{scroll}/{id}/{dst_filename}'):
                 #print(f"skipped {url}{filename}")
                 continue
-            print(f"Downloading {url}{filename}")
-            data = _download(url + filename)
+            print(f"Downloading {url}{src_filename}")
+            data = _download(url + src_filename)
 
             if id == '20231201141544':
-                maskname = filename.replace('tif','png')
+                maskname = src_filename.replace('tif','png')
                 mask = _download('https://dl.ash2txt.org/community-uploads/james/PHerc0332/volumes_masked/20231027191953_unapplied_masks/' + maskname)
                 data[mask == 0] = 0
 
-            print(f"Downloaded {url}{filename}")
-            outname = f"{x:0{len(str(depth))}d}.tif"
-            tifffile.imwrite(f'{self.cachedir}/{scroll}/{id}/{outname}', data)
-            print(f"wrote {url}{filename}")
+            print(f"Downloaded {url}{src_filename}")
+            tifffile.imwrite(f'{self.cachedir}/{scroll}/{id}/{dst_filename}', data)
+            print(f"wrote {url}{src_filename}")
 
     def _get_pad_and_len(self, scroll,idnum):
         depth = the_index[scroll][idnum]['depth']

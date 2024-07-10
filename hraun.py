@@ -11,6 +11,7 @@ from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtGui import QSurfaceFormat
 from vtkmodules.util import numpy_support
+import zarr
 
 def rescale_array(arr):
     min_val = arr.min()
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
 
         self.voxel_data = None
         self.mesh = None
+        self.zarray = None
 
         self.volman = VolMan('D:/vesuvius.volman')
 
@@ -112,12 +114,8 @@ class MainWindow(QMainWindow):
     def load_voxel_data(self):
         vol_id = self.vol_id.text()
         vol_timestamp = self.vol_timestamp.text()
-        dim_x = int(self.dim_x.text())
-        dim_y = int(self.dim_y.text())
-        dim_z = int(self.dim_z.text())
-        chunk_x = int(self.chunk_x.text())
-        chunk_y = int(self.chunk_y.text())
-        chunk_z = int(self.chunk_z.text())
+        dim_x, dim_y, dim_z = map(int, [self.dim_x.text(), self.dim_y.text(), self.dim_z.text()])
+        chunk_x, chunk_y, chunk_z = map(int, [self.chunk_x.text(), self.chunk_y.text(), self.chunk_z.text()])
 
         print("Chunking")
         self.voxel_data = self.volman.chunk(vol_id, vol_timestamp, [dim_z, dim_y, dim_x],
@@ -127,12 +125,14 @@ class MainWindow(QMainWindow):
         downscale = int(self.downscale_input.text())
 
         print(f"Using isolevel: {isolevel}, Downscaling factor: {downscale}")
-        verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel, step_size=downscale)
+        mask = self.voxel_data > 0
+        verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel, step_size=downscale, mask=mask)
+        print(f"got {len(verts)} verts, {len(faces)} aces, {len(normals)} normals, {len(values)} values")
         values = rescale_array(values)
         values = equalize_adapthist(values)
         print("Marching cubes completed successfully.")
 
-        # Create vtkPolyData efficiently
+        # Create initial vtkPolyData efficiently
         points = vtk.vtkPoints()
         points.SetData(numpy_support.numpy_to_vtk(verts, deep=True))
 
@@ -143,15 +143,36 @@ class MainWindow(QMainWindow):
             deep=True
         ))
 
-        self.mesh = vtk.vtkPolyData()
-        self.mesh.SetPoints(points)
-        self.mesh.SetPolys(cells)
+        poly_data = vtk.vtkPolyData()
+        poly_data.SetPoints(points)
+        poly_data.SetPolys(cells)
 
-        print("VTK mesh created")
+        # Perform triangle stripping
+        strip_per = vtk.vtkStripper()
+        strip_per.SetInputData(poly_data)
+        strip_per.Update()
+        self.mesh = strip_per.GetOutput()
+
+        print("VTK mesh created and triangle strips generated")
 
         # Print statistics
         print(f"Number of points: {self.mesh.GetNumberOfPoints()}")
         print(f"Number of cells: {self.mesh.GetNumberOfCells()}")
+
+        # Convert and add normals to the mesh
+        #normals_array = vtk.vtkSignedCharArray()
+        #normals_array.SetNumberOfComponents(3)
+        #normals_array.SetName("Normals")
+
+        # Scale and convert normals to signed char
+        #scaled_normals = np.clip(normals * 127, -127, 127).astype(np.int8)
+        #normals_array.SetNumberOfTuples(len(scaled_normals))
+        #normals_array.SetArray(scaled_normals.ravel(), len(scaled_normals) * 3, 1)
+
+        #self.mesh.GetPointData().SetNormals(normals_array)
+
+        if vol_id == "Scroll1":
+            self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll1.zarr','r')
 
         # Add colors to the mesh
         colors = vtk.vtkUnsignedCharArray()
@@ -171,8 +192,6 @@ class MainWindow(QMainWindow):
         mapper = vtk.vtkOpenGLPolyDataMapper()
         mapper.SetInputData(self.mesh)
 
-        # Enable VBOs
-        #mapper.SetVBOShiftScaleMethod(vtk.vtkOpenGLVertexBufferObject.DISABLE_SHIFT_SCALE)
 
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
