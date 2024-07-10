@@ -10,7 +10,7 @@ import concurrent
 
 the_index = {
     'Scroll1': {
-        '20230205180739': {'depth': 14376, 'height': 7888, 'width': 8096, 'ext': 'tif', 'url': 'https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes/20230205180739/'},
+        '20230205180739': {'depth': 14376, 'height': 7888, 'width': 8096, 'ext': 'tif', 'url': 'https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes_masked/20230205180739/'},
         '20230206171837': {'depth': 10532, 'height': 7812, 'width': 8316, 'ext': 'tif', 'url': 'https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volumes/20230206171837/'}
     },
     'Scroll2': {
