@@ -1,6 +1,6 @@
 import sys
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QSplitter, QLabel, QLineEdit, QPushButton
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QSplitter, QLabel, QLineEdit, QPushButton, QCheckBox
 from PyQt6.QtCore import Qt
 from skimage import measure
 import matplotlib.pyplot as plt
@@ -107,9 +107,16 @@ class MainWindow(QMainWindow):
         self.downscale_input = QLineEdit("1")
         self.control_layout.addWidget(self.downscale_input)
 
+
+        self.color_source_checkbox = QCheckBox("Use Zarr for Coloring")
+        self.color_source_checkbox.setChecked(True)  # Default to using Zarr
+        self.control_layout.addWidget(self.color_source_checkbox)
+
         self.load_button = QPushButton("Load Data")
         self.load_button.clicked.connect(self.load_voxel_data)
         self.control_layout.addWidget(self.load_button)
+
+
 
     def load_voxel_data(self):
         vol_id = self.vol_id.text()
@@ -120,16 +127,14 @@ class MainWindow(QMainWindow):
         print("Chunking")
         self.voxel_data = self.volman.chunk(vol_id, vol_timestamp, [dim_z, dim_y, dim_x],
                                             [chunk_z, chunk_y, chunk_x])
-
+        #self.voxel_data = np.rot90(self.voxel_data, k=3, axes=(0, 2))
         isolevel = int(self.isolevel_input.text())
         downscale = int(self.downscale_input.text())
 
         print(f"Using isolevel: {isolevel}, Downscaling factor: {downscale}")
         mask = self.voxel_data > 0
-        verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel, step_size=downscale, mask=mask)
-        print(f"got {len(verts)} verts, {len(faces)} aces, {len(normals)} normals, {len(values)} values")
-        values = rescale_array(values)
-        values = equalize_adapthist(values)
+        verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel, step_size=downscale,
+                                                               mask=mask)
         print("Marching cubes completed successfully.")
 
         # Create initial vtkPolyData efficiently
@@ -159,20 +164,48 @@ class MainWindow(QMainWindow):
         print(f"Number of points: {self.mesh.GetNumberOfPoints()}")
         print(f"Number of cells: {self.mesh.GetNumberOfCells()}")
 
-        # Convert and add normals to the mesh
-        #normals_array = vtk.vtkSignedCharArray()
-        #normals_array.SetNumberOfComponents(3)
-        #normals_array.SetName("Normals")
+        # Coloring logic
+        if self.color_source_checkbox.isChecked() and vol_id == "Scroll1":
+            # Use Zarr for coloring
+            self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll1.zarr', 'r')
 
-        # Scale and convert normals to signed char
-        #scaled_normals = np.clip(normals * 127, -127, 127).astype(np.int8)
-        #normals_array.SetNumberOfTuples(len(scaled_normals))
-        #normals_array.SetArray(scaled_normals.ravel(), len(scaled_normals) * 3, 1)
+            # Get vertex coordinates
+            n_points = self.mesh.GetNumberOfPoints()
+            vertices = np.array([self.mesh.GetPoint(i) for i in range(n_points)])
 
-        #self.mesh.GetPointData().SetNormals(normals_array)
+            # Convert vertex coordinates to zarr indices
+            # Adjust for the different coordinate systems and apply offsets
+            zarr_indices = np.round(vertices).astype(int)
 
-        if vol_id == "Scroll1":
-            self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll1.zarr','r')
+            # Map voxel space (z, y, x) to zarr space (y, x, z) and apply offsets
+            zarr_y = zarr_indices[:, 1] + dim_y  # y in voxel space maps to y (dim 0) in zarr
+            zarr_x = zarr_indices[:, 2] + dim_x  # x in voxel space maps to x (dim 1) in zarr
+            zarr_z = zarr_indices[:, 0] + dim_z  # z in voxel space maps to z (dim 2) in zarr
+
+            # Clip indices to valid range
+            zarr_shape = np.array(self.zarray.shape)
+            zarr_y = np.clip(zarr_y, 0, zarr_shape[0] - 1)
+            zarr_x = np.clip(zarr_x, 0, zarr_shape[1] - 1)
+            zarr_z = np.clip(zarr_z, 0, zarr_shape[2] - 1)
+
+            # Get zarr values for vertices
+            color_values = self.zarray[zarr_y, zarr_x, zarr_z]
+
+            print(f"Zarr shape: {self.zarray.shape}")
+            print(f"Chunk dimensions (z, y, x): {chunk_z}, {chunk_y}, {chunk_x}")
+            print(f"Chunk start position (z, y, x): {dim_z}, {dim_y}, {dim_x}")
+            print(f"Vertex coordinate ranges: X({vertices[:, 2].min():.2f}, {vertices[:, 2].max():.2f}), "
+                  f"Y({vertices[:, 1].min():.2f}, {vertices[:, 1].max():.2f}), "
+                  f"Z({vertices[:, 0].min():.2f}, {vertices[:, 0].max():.2f})")
+            print(f"Zarr index ranges: X({zarr_x.min()}-{zarr_x.max()}), "
+                  f"Y({zarr_y.min()}-{zarr_y.max()}), Z({zarr_z.min()}-{zarr_z.max()})")
+        else:
+            # Use marching cubes values for coloring
+            color_values = values
+
+        # Normalize color values
+        normalized_values = (color_values - color_values.min()) / (color_values.max() - color_values.min())
+        normalized_values = equalize_adapthist(normalized_values)
 
         # Add colors to the mesh
         colors = vtk.vtkUnsignedCharArray()
@@ -180,9 +213,9 @@ class MainWindow(QMainWindow):
         colors.SetName("Colors")
 
         cmap = plt.get_cmap("viridis")
-        color_values = (cmap(values / values.max())[:, :3] * 255).astype(np.uint8)
-        colors.SetNumberOfTuples(len(color_values))
-        colors.SetArray(color_values.ravel(), len(color_values) * 3, 1)
+        rgb_values = (cmap(normalized_values)[:, :3] * 255).astype(np.uint8)
+        colors.SetNumberOfTuples(len(rgb_values))
+        colors.SetArray(rgb_values.ravel(), len(rgb_values) * 3, 1)
 
         self.mesh.GetPointData().SetScalars(colors)
 
@@ -191,7 +224,6 @@ class MainWindow(QMainWindow):
         # Create mapper and actor
         mapper = vtk.vtkOpenGLPolyDataMapper()
         mapper.SetInputData(self.mesh)
-
 
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
