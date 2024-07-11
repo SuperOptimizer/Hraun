@@ -12,12 +12,133 @@ from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtGui import QSurfaceFormat
 from vtkmodules.util import numpy_support
 import zarr
+from vtkmodules.vtkCommonCore import vtkIdTypeArray
+from vtkmodules.vtkCommonDataModel import vtkSelection, vtkSelectionNode
+from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
 
 def rescale_array(arr):
     min_val = arr.min()
     max_val = arr.max()
     rescaled_arr = (arr - min_val) / (max_val - min_val)
     return rescaled_arr
+
+
+class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
+    def __init__(self, parent=None, renderer=None):
+        super().__init__()
+        self.parent = parent
+        self.renderer = renderer
+        self.AddObserver("LeftButtonPressEvent", self.left_button_press_event)
+        self.AddObserver("LeftButtonReleaseEvent", self.left_button_release_event)
+        self.AddObserver("MouseMoveEvent", self.on_mouse_move)
+        self.start_position = None
+        self.end_position = None
+        self.rubber_band_actor = None
+
+    def left_button_press_event(self, obj, event):
+        self.start_position = self.GetInteractor().GetEventPosition()
+        self.end_position = None
+        self.remove_rubber_band()
+        self.OnLeftButtonDown()
+
+    def on_mouse_move(self, obj, event):
+        if self.start_position:
+            self.end_position = self.GetInteractor().GetEventPosition()
+            self.draw_rubber_band()
+        self.OnMouseMove()
+
+    def left_button_release_event(self, obj, event):
+        self.end_position = self.GetInteractor().GetEventPosition()
+        self.perform_vertex_pick()
+        self.start_position = None
+        self.end_position = None
+        self.remove_rubber_band()
+        self.OnLeftButtonUp()
+
+    def draw_rubber_band(self):
+        if not self.start_position or not self.end_position or not self.renderer:
+            return
+
+        if self.rubber_band_actor:
+            self.renderer.RemoveActor(self.rubber_band_actor)
+
+        points = vtk.vtkPoints()
+        points.InsertNextPoint(self.start_position[0], self.start_position[1], 0)
+        points.InsertNextPoint(self.end_position[0], self.start_position[1], 0)
+        points.InsertNextPoint(self.end_position[0], self.end_position[1], 0)
+        points.InsertNextPoint(self.start_position[0], self.end_position[1], 0)
+
+        lines = vtk.vtkCellArray()
+        lines.InsertNextCell(5)
+        lines.InsertCellPoint(0)
+        lines.InsertCellPoint(1)
+        lines.InsertCellPoint(2)
+        lines.InsertCellPoint(3)
+        lines.InsertCellPoint(0)
+
+        rubber_band = vtk.vtkPolyData()
+        rubber_band.SetPoints(points)
+        rubber_band.SetLines(lines)
+
+        mapper = vtk.vtkPolyDataMapper2D()
+        mapper.SetInputData(rubber_band)
+
+        self.rubber_band_actor = vtk.vtkActor2D()
+        self.rubber_band_actor.SetMapper(mapper)
+        self.rubber_band_actor.GetProperty().SetColor(1, 1, 1)  # White color
+        self.rubber_band_actor.GetProperty().SetLineWidth(2)
+
+        self.renderer.AddActor(self.rubber_band_actor)
+        self.GetInteractor().GetRenderWindow().Render()
+
+    def remove_rubber_band(self):
+        if self.rubber_band_actor and self.renderer:
+            self.renderer.RemoveActor(self.rubber_band_actor)
+            self.rubber_band_actor = None
+            self.GetInteractor().GetRenderWindow().Render()
+
+    def perform_vertex_pick(self):
+        if not self.start_position or not self.end_position or not self.renderer:
+            return
+
+        picker = vtk.vtkAreaPicker()
+        picker.AreaPick(min(self.start_position[0], self.end_position[0]),
+                        min(self.start_position[1], self.end_position[1]),
+                        max(self.start_position[0], self.end_position[0]),
+                        max(self.start_position[1], self.end_position[1]),
+                        self.renderer)
+
+        frustum = picker.GetFrustum()
+
+        selected_points = vtk.vtkPoints()
+
+        for i in range(self.parent.mesh.GetNumberOfPoints()):
+            point = self.parent.mesh.GetPoint(i)
+            if frustum.EvaluateFunction(point[0], point[1], point[2]) < 0:
+                selected_points.InsertNextPoint(point)
+
+        print(f"Number of selected vertices: {selected_points.GetNumberOfPoints()}")
+
+        point_polydata = vtk.vtkPolyData()
+        point_polydata.SetPoints(selected_points)
+
+        vertex_filter = vtk.vtkVertexGlyphFilter()
+        vertex_filter.SetInputData(point_polydata)
+        vertex_filter.Update()
+
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(vertex_filter.GetOutputPort())
+
+        if self.parent.selected_vertex_actor:
+            self.renderer.RemoveActor(self.parent.selected_vertex_actor)
+
+        self.parent.selected_vertex_actor = vtk.vtkActor()
+        self.parent.selected_vertex_actor.SetMapper(mapper)
+        self.parent.selected_vertex_actor.GetProperty().SetColor(1, 0, 0)  # Red color
+        self.parent.selected_vertex_actor.GetProperty().SetPointSize(5)  # Increase point size for visibility
+
+        self.renderer.AddActor(self.parent.selected_vertex_actor)
+        self.GetInteractor().GetRenderWindow().Render()
 
 
 class CustomQVTKRenderWindowInteractor(QVTKRenderWindowInteractor):
@@ -55,6 +176,7 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(1, 1)
 
         self.init_params_ui()
+        self.init_picking_toggle()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFocus()
 
@@ -62,11 +184,34 @@ class MainWindow(QMainWindow):
         self.vtk_widget.GetRenderWindow().AddRenderer(self.renderer)
         self.interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
 
+        # Set up interactor styles
+        self.camera_style = vtk.vtkInteractorStyleTrackballCamera()
+        self.picking_style = PickingInteractorStyle(self, self.renderer)
+        self.interactor.SetInteractorStyle(self.camera_style)
+
         self.voxel_data = None
         self.mesh = None
         self.zarray = None
+        self.selected_vertex_actor = None
 
         self.volman = VolMan('D:/vesuvius.volman')
+
+        self.picking_enabled = False
+
+    def init_picking_toggle(self):
+        self.picking_toggle = QCheckBox("Enable Picking")
+        self.picking_toggle.setChecked(False)
+        self.picking_toggle.stateChanged.connect(self.toggle_picking)
+        self.control_layout.addWidget(self.picking_toggle)
+
+    def toggle_picking(self, state):
+        self.picking_enabled = state == Qt.CheckState.Checked.value
+        if self.picking_enabled:
+            self.interactor.SetInteractorStyle(self.picking_style)
+        else:
+            self.interactor.SetInteractorStyle(self.camera_style)
+
+        self.vtk_widget.GetRenderWindow().Render()
 
     def init_params_ui(self):
         self.label_vol = QLabel("Volume ID:")
@@ -249,7 +394,6 @@ class MainWindow(QMainWindow):
         self.vtk_widget.GetRenderWindow().Render()
 
         print("Mesh rendering completed")
-
 
 
 if __name__ == "__main__":
