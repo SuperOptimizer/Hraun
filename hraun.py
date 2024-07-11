@@ -1,6 +1,6 @@
 import sys
 import numpy as np
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QSplitter, QLabel, QLineEdit, QPushButton, QCheckBox
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QSplitter, QLabel, QLineEdit, QPushButton, QCheckBox, QComboBox
 from PyQt6.QtCore import Qt
 from skimage import measure
 import matplotlib.pyplot as plt
@@ -112,13 +112,52 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
 
         selected_points = vtk.vtkPoints()
 
+        if self.parent.picking_mode == "Surface":
+            self.perform_surface_vertex_pick(selected_points)
+        else:  # Through picking
+            self.perform_through_vertex_pick(selected_points, frustum)
+
+        print(f"Number of selected vertices: {selected_points.GetNumberOfPoints()}")
+
+        self.highlight_selected_points(selected_points)
+
+    def perform_through_vertex_pick(self, selected_points, frustum):
         for i in range(self.parent.mesh.GetNumberOfPoints()):
             point = self.parent.mesh.GetPoint(i)
             if frustum.EvaluateFunction(point[0], point[1], point[2]) < 0:
                 selected_points.InsertNextPoint(point)
 
-        print(f"Number of selected vertices: {selected_points.GetNumberOfPoints()}")
+    def perform_surface_vertex_pick(self, selected_points):
+        renderer = self.GetCurrentRenderer()
+        render_window = self.GetInteractor().GetRenderWindow()
 
+        # Create a hardware selector
+        hw_selector = vtk.vtkHardwareSelector()
+        hw_selector.SetRenderer(renderer)
+        hw_selector.SetArea(int(min(self.start_position[0], self.end_position[0])),
+                            int(min(self.start_position[1], self.end_position[1])),
+                            int(max(self.start_position[0], self.end_position[0])),
+                            int(max(self.start_position[1], self.end_position[1])))
+
+        # Set the selection to points
+        hw_selector.SetFieldAssociation(vtk.vtkDataObject.FIELD_ASSOCIATION_POINTS)
+
+        # Perform the selection
+        selection = hw_selector.Select()
+
+        # Process the selection
+        selection_node = selection.GetNode(0)
+        id_array = selection_node.GetSelectionList()
+
+        if id_array:
+            for i in range(id_array.GetNumberOfTuples()):
+                point_id = id_array.GetValue(i)
+                point = self.parent.mesh.GetPoint(point_id)
+                selected_points.InsertNextPoint(point)
+
+        print(f"Surface picking selected {selected_points.GetNumberOfPoints()} points")
+
+    def highlight_selected_points(self, selected_points):
         point_polydata = vtk.vtkPolyData()
         point_polydata.SetPoints(selected_points)
 
@@ -176,7 +215,7 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(1, 1)
 
         self.init_params_ui()
-        self.init_picking_toggle()
+        self.init_picking_mode_selector()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFocus()
 
@@ -198,19 +237,19 @@ class MainWindow(QMainWindow):
 
         self.picking_enabled = False
 
-    def init_picking_toggle(self):
-        self.picking_toggle = QCheckBox("Enable Picking")
-        self.picking_toggle.setChecked(False)
-        self.picking_toggle.stateChanged.connect(self.toggle_picking)
-        self.control_layout.addWidget(self.picking_toggle)
+    def init_picking_mode_selector(self):
+        self.picking_mode_selector = QComboBox()
+        self.picking_mode_selector.addItems(["None", "Through", "Surface"])
+        self.picking_mode_selector.currentTextChanged.connect(self.change_picking_mode)
+        self.control_layout.addWidget(QLabel("Picking Mode:"))
+        self.control_layout.addWidget(self.picking_mode_selector)
 
-    def toggle_picking(self, state):
-        self.picking_enabled = state == Qt.CheckState.Checked.value
-        if self.picking_enabled:
-            self.interactor.SetInteractorStyle(self.picking_style)
-        else:
+    def change_picking_mode(self, mode):
+        self.picking_mode = mode
+        if mode == "None":
             self.interactor.SetInteractorStyle(self.camera_style)
-
+        else:
+            self.interactor.SetInteractorStyle(self.picking_style)
         self.vtk_widget.GetRenderWindow().Render()
 
     def init_params_ui(self):
