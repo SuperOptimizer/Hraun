@@ -32,26 +32,32 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
         self.start_position = None
         self.end_position = None
         self.rubber_band_actor = None
+        self.is_picking = False
 
     def left_button_press_event(self, obj, event):
         self.start_position = self.GetInteractor().GetEventPosition()
         self.end_position = None
         self.remove_rubber_band()
-        self.OnLeftButtonDown()
+        self.is_picking = True
+        self.GetInteractor().GetRenderWindow().SetDesiredUpdateRate(30.0)
+        self.InvokeEvent(vtk.vtkCommand.StartInteractionEvent)
 
     def on_mouse_move(self, obj, event):
-        if self.start_position:
+        if self.is_picking:
             self.end_position = self.GetInteractor().GetEventPosition()
             self.draw_rubber_band()
-        self.OnMouseMove()
+            self.InvokeEvent(vtk.vtkCommand.InteractionEvent)
 
     def left_button_release_event(self, obj, event):
-        self.end_position = self.GetInteractor().GetEventPosition()
-        self.perform_vertex_pick()
-        self.start_position = None
-        self.end_position = None
-        self.remove_rubber_band()
-        self.OnLeftButtonUp()
+        if self.is_picking:
+            self.end_position = self.GetInteractor().GetEventPosition()
+            self.perform_vertex_pick()
+            self.start_position = None
+            self.end_position = None
+            self.remove_rubber_band()
+            self.is_picking = False
+            self.GetInteractor().GetRenderWindow().SetDesiredUpdateRate(0.001)
+            self.InvokeEvent(vtk.vtkCommand.EndInteractionEvent)
 
     def draw_rubber_band(self):
         if not self.start_position or not self.end_position or not self.renderer:
@@ -106,30 +112,24 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
                         max(self.start_position[1], self.end_position[1]),
                         self.renderer)
 
-        frustum = picker.GetFrustum()
-
         selected_points = vtk.vtkPoints()
 
         if self.parent.picking_mode == "Surface":
-            self.perform_surface_vertex_pick(selected_points)
+            self.perform_surface_vertex_pick(selected_points, picker)
         else:
-            self.perform_through_vertex_pick(selected_points, frustum)
+            self.perform_through_vertex_pick(selected_points, picker.GetFrustum())
 
         print(f"Number of selected vertices: {selected_points.GetNumberOfPoints()}")
 
         self.highlight_selected_points(selected_points)
 
-    def perform_through_vertex_pick(self, selected_points, frustum):
-        for i in range(self.parent.mesh.GetNumberOfPoints()):
-            point = self.parent.mesh.GetPoint(i)
-            if frustum.EvaluateFunction(point[0], point[1], point[2]) < 0:
-                selected_points.InsertNextPoint(point)
-
-    def perform_surface_vertex_pick(self, selected_points):
-        renderer = self.GetCurrentRenderer()
+    def perform_surface_vertex_pick(self, selected_points, picker):
+        if not self.renderer:
+            print("No renderer available for surface picking")
+            return
 
         hw_selector = vtk.vtkHardwareSelector()
-        hw_selector.SetRenderer(renderer)
+        hw_selector.SetRenderer(self.renderer)
         hw_selector.SetArea(int(min(self.start_position[0], self.end_position[0])),
                             int(min(self.start_position[1], self.end_position[1])),
                             int(max(self.start_position[0], self.end_position[0])),
@@ -139,16 +139,23 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
 
         selection = hw_selector.Select()
 
-        selection_node = selection.GetNode(0)
-        id_array = selection_node.GetSelectionList()
+        if selection and selection.GetNumberOfNodes() > 0:
+            selection_node = selection.GetNode(0)
+            id_array = selection_node.GetSelectionList()
 
-        if id_array:
-            for i in range(id_array.GetNumberOfTuples()):
-                point_id = id_array.GetValue(i)
-                point = self.parent.mesh.GetPoint(point_id)
-                selected_points.InsertNextPoint(point)
+            if id_array:
+                for i in range(id_array.GetNumberOfTuples()):
+                    point_id = id_array.GetValue(i)
+                    point = self.parent.mesh.GetPoint(point_id)
+                    selected_points.InsertNextPoint(point)
 
         print(f"Surface picking selected {selected_points.GetNumberOfPoints()} points")
+
+    def perform_through_vertex_pick(self, selected_points, frustum):
+        for i in range(self.parent.mesh.GetNumberOfPoints()):
+            point = self.parent.mesh.GetPoint(i)
+            if frustum.EvaluateFunction(point[0], point[1], point[2]) < 0:
+                selected_points.InsertNextPoint(point)
 
     def highlight_selected_points(self, selected_points):
         point_polydata = vtk.vtkPolyData()
