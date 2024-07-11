@@ -8,13 +8,9 @@ from volman import VolMan
 from skimage.exposure import equalize_adapthist
 import vtk
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
-from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtGui import QSurfaceFormat
 from vtkmodules.util import numpy_support
 import zarr
-from vtkmodules.vtkCommonCore import vtkIdTypeArray
-from vtkmodules.vtkCommonDataModel import vtkSelection, vtkSelectionNode
-from vtkmodules.vtkFiltersExtraction import vtkExtractSelection
 
 def rescale_array(arr):
     min_val = arr.min()
@@ -85,7 +81,7 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
 
         self.rubber_band_actor = vtk.vtkActor2D()
         self.rubber_band_actor.SetMapper(mapper)
-        self.rubber_band_actor.GetProperty().SetColor(1, 1, 1)  # White color
+        self.rubber_band_actor.GetProperty().SetColor(1, 1, 1)
         self.rubber_band_actor.GetProperty().SetLineWidth(2)
 
         self.renderer.AddActor(self.rubber_band_actor)
@@ -114,7 +110,7 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
 
         if self.parent.picking_mode == "Surface":
             self.perform_surface_vertex_pick(selected_points)
-        else:  # Through picking
+        else:
             self.perform_through_vertex_pick(selected_points, frustum)
 
         print(f"Number of selected vertices: {selected_points.GetNumberOfPoints()}")
@@ -129,9 +125,7 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
 
     def perform_surface_vertex_pick(self, selected_points):
         renderer = self.GetCurrentRenderer()
-        render_window = self.GetInteractor().GetRenderWindow()
 
-        # Create a hardware selector
         hw_selector = vtk.vtkHardwareSelector()
         hw_selector.SetRenderer(renderer)
         hw_selector.SetArea(int(min(self.start_position[0], self.end_position[0])),
@@ -139,13 +133,10 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
                             int(max(self.start_position[0], self.end_position[0])),
                             int(max(self.start_position[1], self.end_position[1])))
 
-        # Set the selection to points
         hw_selector.SetFieldAssociation(vtk.vtkDataObject.FIELD_ASSOCIATION_POINTS)
 
-        # Perform the selection
         selection = hw_selector.Select()
 
-        # Process the selection
         selection_node = selection.GetNode(0)
         id_array = selection_node.GetSelectionList()
 
@@ -173,8 +164,8 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
 
         self.parent.selected_vertex_actor = vtk.vtkActor()
         self.parent.selected_vertex_actor.SetMapper(mapper)
-        self.parent.selected_vertex_actor.GetProperty().SetColor(1, 0, 0)  # Red color
-        self.parent.selected_vertex_actor.GetProperty().SetPointSize(5)  # Increase point size for visibility
+        self.parent.selected_vertex_actor.GetProperty().SetColor(1, 0, 0)
+        self.parent.selected_vertex_actor.GetProperty().SetPointSize(5)
 
         self.renderer.AddActor(self.parent.selected_vertex_actor)
         self.GetInteractor().GetRenderWindow().Render()
@@ -186,7 +177,7 @@ class CustomQVTKRenderWindowInteractor(QVTKRenderWindowInteractor):
 
     def CreateFrame(self):
         super().CreateFrame()
-        self.GetRenderWindow().SetOffScreenRendering(True)  # Enable off-screen rendering
+        self.GetRenderWindow().SetOffScreenRendering(True)
 
 
 class MainWindow(QMainWindow):
@@ -198,7 +189,7 @@ class MainWindow(QMainWindow):
         format = QSurfaceFormat()
         format.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
         format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-        format.setVersion(4, 5)  # Specify OpenGL version
+        format.setVersion(4, 5)
         QSurfaceFormat.setDefaultFormat(format)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -223,7 +214,6 @@ class MainWindow(QMainWindow):
         self.vtk_widget.GetRenderWindow().AddRenderer(self.renderer)
         self.interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
 
-        # Set up interactor styles
         self.camera_style = vtk.vtkInteractorStyleTrackballCamera()
         self.picking_style = PickingInteractorStyle(self, self.renderer)
         self.interactor.SetInteractorStyle(self.camera_style)
@@ -293,7 +283,7 @@ class MainWindow(QMainWindow):
 
 
         self.color_source_checkbox = QCheckBox("Use Zarr for Coloring")
-        self.color_source_checkbox.setChecked(True)  # Default to using Zarr
+        self.color_source_checkbox.setChecked(True)
         self.control_layout.addWidget(self.color_source_checkbox)
 
         self.load_button = QPushButton("Load Data")
@@ -311,7 +301,7 @@ class MainWindow(QMainWindow):
         print("Chunking")
         self.voxel_data = self.volman.chunk(vol_id, vol_timestamp, [dim_z, dim_y, dim_x],
                                             [chunk_z, chunk_y, chunk_x])
-        #self.voxel_data = np.rot90(self.voxel_data, k=3, axes=(0, 2))
+
         isolevel = int(self.isolevel_input.text())
         downscale = int(self.downscale_input.text())
 
@@ -321,7 +311,6 @@ class MainWindow(QMainWindow):
                                                                mask=mask)
         print("Marching cubes completed successfully.")
 
-        # Create initial vtkPolyData efficiently
         points = vtk.vtkPoints()
         points.SetData(numpy_support.numpy_to_vtk(verts, deep=True))
 
@@ -336,7 +325,6 @@ class MainWindow(QMainWindow):
         poly_data.SetPoints(points)
         poly_data.SetPolys(cells)
 
-        # Perform triangle stripping
         strip_per = vtk.vtkStripper()
         strip_per.SetInputData(poly_data)
         strip_per.Update()
@@ -344,35 +332,26 @@ class MainWindow(QMainWindow):
 
         print("VTK mesh created and triangle strips generated")
 
-        # Print statistics
         print(f"Number of points: {self.mesh.GetNumberOfPoints()}")
         print(f"Number of cells: {self.mesh.GetNumberOfCells()}")
 
-        # Coloring logic
         if self.color_source_checkbox.isChecked() and vol_id == "Scroll1":
-            # Use Zarr for coloring
             self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll1.zarr', 'r')
 
-            # Get vertex coordinates
             n_points = self.mesh.GetNumberOfPoints()
             vertices = np.array([self.mesh.GetPoint(i) for i in range(n_points)])
 
-            # Convert vertex coordinates to zarr indices
-            # Adjust for the different coordinate systems and apply offsets
             zarr_indices = np.round(vertices).astype(int)
 
-            # Map voxel space (z, y, x) to zarr space (y, x, z) and apply offsets
-            zarr_y = zarr_indices[:, 1] + dim_y  # y in voxel space maps to y (dim 0) in zarr
-            zarr_x = zarr_indices[:, 2] + dim_x  # x in voxel space maps to x (dim 1) in zarr
-            zarr_z = zarr_indices[:, 0] + dim_z  # z in voxel space maps to z (dim 2) in zarr
+            zarr_y = zarr_indices[:, 1] + dim_y
+            zarr_x = zarr_indices[:, 2] + dim_x
+            zarr_z = zarr_indices[:, 0] + dim_z
 
-            # Clip indices to valid range
             zarr_shape = np.array(self.zarray.shape)
             zarr_y = np.clip(zarr_y, 0, zarr_shape[0] - 1)
             zarr_x = np.clip(zarr_x, 0, zarr_shape[1] - 1)
             zarr_z = np.clip(zarr_z, 0, zarr_shape[2] - 1)
 
-            # Get zarr values for vertices
             color_values = self.zarray[zarr_y, zarr_x, zarr_z]
 
             print(f"Zarr shape: {self.zarray.shape}")
@@ -384,14 +363,11 @@ class MainWindow(QMainWindow):
             print(f"Zarr index ranges: X({zarr_x.min()}-{zarr_x.max()}), "
                   f"Y({zarr_y.min()}-{zarr_y.max()}), Z({zarr_z.min()}-{zarr_z.max()})")
         else:
-            # Use marching cubes values for coloring
             color_values = values
 
-        # Normalize color values
         normalized_values = (color_values - color_values.min()) / (color_values.max() - color_values.min())
         normalized_values = equalize_adapthist(normalized_values)
 
-        # Add colors to the mesh
         colors = vtk.vtkUnsignedCharArray()
         colors.SetNumberOfComponents(3)
         colors.SetName("Colors")
@@ -405,23 +381,20 @@ class MainWindow(QMainWindow):
 
         print('Colorizing completed')
 
-        # Create mapper and actor
         mapper = vtk.vtkOpenGLPolyDataMapper()
         mapper.SetInputData(self.mesh)
 
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
 
-        # Set up material properties for simple ambient lighting
-        actor.GetProperty().SetAmbient(1.0)  # Full ambient lighting
-        actor.GetProperty().SetDiffuse(0.0)  # No diffuse lighting
-        actor.GetProperty().SetSpecular(0.0)  # No specular lighting
+        actor.GetProperty().SetAmbient(1.0)
+        actor.GetProperty().SetDiffuse(0.0)
+        actor.GetProperty().SetSpecular(0.0)
 
         print('Adding mesh to renderer')
         self.renderer.RemoveAllViewProps()
         self.renderer.AddActor(actor)
 
-        # Set background color
         self.renderer.SetBackground(0.1, 0.1, 0.1)  # Dark gray background
 
         self.renderer.ResetCamera()
