@@ -828,7 +828,6 @@ class MainWindow(QMainWindow):
         print(f"Offsets: {offset_dims}")
         print(f"Chunk size: {chunk_dims}")
 
-        #when called through the GUI voxel_data is set to False rather than None because ???
         if voxel_data is False:
             self.voxel_data = self.volman.chunk(volume_id, timestamp, offset_dims, chunk_dims)
         else:
@@ -838,10 +837,10 @@ class MainWindow(QMainWindow):
         downscale = self.downscale_slider.value()
         print(f"Using isolevel: {isolevel}, Downscaling factor: {downscale}")
         mask = self.voxel_data > 0
-        #self.voxel_data[self.voxel_data < isolevel] = 0
+        self.voxel_data[self.voxel_data < isolevel] = 0
         try:
             verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel,
-                                                                   step_size=downscale,)
+                                                                   step_size=downscale, mask=mask)
         except ValueError:
             QMessageBox.warning(self, "Invalid marching cubes data", "The given chunk did not yield any triangles")
             return
@@ -924,7 +923,7 @@ class MainWindow(QMainWindow):
         actor.SetMapper(mapper)
 
         # Configure actor properties for lighting and shadows
-        actor.GetProperty().SetAmbient(0.1)
+        actor.GetProperty().SetAmbient(0.3)
         actor.GetProperty().SetDiffuse(0.7)
         actor.GetProperty().SetSpecular(0.2)
         actor.GetProperty().SetSpecularPower(10)
@@ -933,12 +932,21 @@ class MainWindow(QMainWindow):
         self.renderer.RemoveAllViewProps()
         self.renderer.AddActor(actor)
 
-        self.renderer.SetBackground(0.1, 0.1, 0.1)  # Dark gray background
+        self.renderer.SetBackground(0.05, 0.05, 0.05)  # Dark gray background
+
+        # Set up the camera for consistent orientation
+        camera = self.renderer.GetActiveCamera()
+        camera.SetPosition(0, 0, 1)  # Camera position
+        camera.SetFocalPoint(0, 0, 0)  # Look at point
+        camera.SetViewUp(0, 1, 0)  # Up direction
 
         self.renderer.ResetCamera()
-        self.renderer.GetActiveCamera().Elevation(20)
-        self.renderer.GetActiveCamera().Azimuth(20)
-        self.renderer.GetActiveCamera().Dolly(1.2)
+
+        # Adjust the view to match the desired orientation
+        camera.Elevation(-20)  # Tilt down slightly
+        camera.Azimuth(20)  # Rotate slightly to the right
+        camera.Dolly(1.2)  # Zoom in a bit
+
         self.renderer.ResetCameraClippingRange()
 
         self.vtk_widget.GetRenderWindow().Render()
