@@ -50,6 +50,27 @@ the_index = {
 }
 
 
+def get_color_for_selection_type(selection_type):
+    colors = [
+        (1, 0, 0),  # Red
+        (0, 1, 0),  # Green
+        (0, 0, 1),  # Blue
+        (1, 1, 0),  # Yellow
+        (1, 0, 1),  # Magenta
+        (0, 1, 1),  # Cyan
+        (1, 0.5, 0),  # Orange
+        (0.5, 0, 1),  # Purple
+        (0, 0.5, 0),  # Dark Green
+        (0.5, 0.5, 0),  # Olive
+        (0.5, 0, 0.5),  # Plum
+        (0, 0.5, 0.5),  # Teal
+        (1, 0.5, 0.5),  # Pink
+        (0.5, 1, 0.5),  # Light Green
+        (0.5, 0.5, 1),  # Light Blue
+        (0.7, 0.7, 0.7),  # Light Gray
+    ]
+    return colors[selection_type]
+
 def rescale_array(arr):
     min_val = arr.min()
     max_val = arr.max()
@@ -226,26 +247,21 @@ class VolMan:
         return data
 
 class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
-    def __init__(self, parent=None, renderer=None):
+    def __init__(self, parent):
         super().__init__()
         self.parent = parent
-        self.renderer = renderer
+
         self.AddObserver("LeftButtonPressEvent", self.left_button_press_event)
         self.AddObserver("LeftButtonReleaseEvent", self.left_button_release_event)
         self.AddObserver("MouseMoveEvent", self.on_mouse_move)
         self.start_position = None
         self.end_position = None
-        self.rubber_band_actor = None
         self.is_picking = False
-        self.selected_points_history = []  # Store history of selections
-        self.selected_points = {i: vtk.vtkPoints() for i in range(16)}  # 16 different selection types
-        self.selected_vertex_actors = {i: None for i in range(16)}  # Actors for each selection type
-
 
     def left_button_press_event(self, obj, event):
         self.start_position = self.GetInteractor().GetEventPosition()
         self.end_position = None
-        self.remove_rubber_band()
+        self.parent.remove_rubber_band()
         self.is_picking = True
         self.GetInteractor().GetRenderWindow().SetDesiredUpdateRate(30.0)
         self.InvokeEvent(vtk.vtkCommand.StartInteractionEvent)
@@ -253,207 +269,19 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
     def on_mouse_move(self, obj, event):
         if self.is_picking:
             self.end_position = self.GetInteractor().GetEventPosition()
-            self.draw_rubber_band()
+            self.parent.draw_rubber_band(self.start_position, self.end_position)
             self.InvokeEvent(vtk.vtkCommand.InteractionEvent)
 
     def left_button_release_event(self, obj, event):
         if self.is_picking:
             self.end_position = self.GetInteractor().GetEventPosition()
-            self.perform_vertex_pick()
+            self.parent.perform_vertex_pick(self.start_position, self.end_position)
             self.start_position = None
             self.end_position = None
-            self.remove_rubber_band()
+            self.parent.remove_rubber_band()
             self.is_picking = False
             self.GetInteractor().GetRenderWindow().SetDesiredUpdateRate(0.001)
             self.InvokeEvent(vtk.vtkCommand.EndInteractionEvent)
-
-    def draw_rubber_band(self):
-        if not self.start_position or not self.end_position or not self.renderer:
-            return
-
-        if self.rubber_band_actor:
-            self.renderer.RemoveActor(self.rubber_band_actor)
-
-        points = vtk.vtkPoints()
-        points.InsertNextPoint(self.start_position[0], self.start_position[1], 0)
-        points.InsertNextPoint(self.end_position[0], self.start_position[1], 0)
-        points.InsertNextPoint(self.end_position[0], self.end_position[1], 0)
-        points.InsertNextPoint(self.start_position[0], self.end_position[1], 0)
-
-        lines = vtk.vtkCellArray()
-        lines.InsertNextCell(5)
-        lines.InsertCellPoint(0)
-        lines.InsertCellPoint(1)
-        lines.InsertCellPoint(2)
-        lines.InsertCellPoint(3)
-        lines.InsertCellPoint(0)
-
-        rubber_band = vtk.vtkPolyData()
-        rubber_band.SetPoints(points)
-        rubber_band.SetLines(lines)
-
-        mapper = vtk.vtkPolyDataMapper2D()
-        mapper.SetInputData(rubber_band)
-
-        self.rubber_band_actor = vtk.vtkActor2D()
-        self.rubber_band_actor.SetMapper(mapper)
-        self.rubber_band_actor.GetProperty().SetColor(1, 1, 1)
-        self.rubber_band_actor.GetProperty().SetLineWidth(2)
-
-        self.renderer.AddActor(self.rubber_band_actor)
-        self.GetInteractor().GetRenderWindow().Render()
-
-    def remove_rubber_band(self):
-        if self.rubber_band_actor and self.renderer:
-            self.renderer.RemoveActor(self.rubber_band_actor)
-            self.rubber_band_actor = None
-            self.GetInteractor().GetRenderWindow().Render()
-
-    def perform_vertex_pick(self):
-        if not self.start_position or not self.end_position or not self.renderer:
-            return
-
-        picker = vtk.vtkAreaPicker()
-        picker.AreaPick(min(self.start_position[0], self.end_position[0]),
-                        min(self.start_position[1], self.end_position[1]),
-                        max(self.start_position[0], self.end_position[0]),
-                        max(self.start_position[1], self.end_position[1]),
-                        self.renderer)
-
-        selected_points = vtk.vtkPoints()
-
-        if self.parent.picking_mode == "Surface":
-            self.perform_surface_vertex_pick(selected_points, picker)
-        else:
-            self.perform_through_vertex_pick(selected_points, picker.GetFrustum())
-
-        print(f"Number of selected vertices: {selected_points.GetNumberOfPoints()}")
-
-        self.highlight_selected_points(selected_points)
-
-    def perform_surface_vertex_pick(self, selected_points, picker):
-        if not self.renderer:
-            print("No renderer available for surface picking")
-            return
-
-        hw_selector = vtk.vtkHardwareSelector()
-        hw_selector.SetRenderer(self.renderer)
-        hw_selector.SetArea(int(min(self.start_position[0], self.end_position[0])),
-                            int(min(self.start_position[1], self.end_position[1])),
-                            int(max(self.start_position[0], self.end_position[0])),
-                            int(max(self.start_position[1], self.end_position[1])))
-
-        hw_selector.SetFieldAssociation(vtk.vtkDataObject.FIELD_ASSOCIATION_POINTS)
-
-        selection = hw_selector.Select()
-
-        if selection and selection.GetNumberOfNodes() > 0:
-            selection_node = selection.GetNode(0)
-            id_array = selection_node.GetSelectionList()
-
-            if id_array:
-                for i in range(id_array.GetNumberOfTuples()):
-                    point_id = id_array.GetValue(i)
-                    point = self.parent.mesh.GetPoint(point_id)
-                    selected_points.InsertNextPoint(point)
-
-        print(f"Surface picking selected {selected_points.GetNumberOfPoints()} points")
-
-    def perform_through_vertex_pick(self, selected_points, frustum):
-        for i in range(self.parent.mesh.GetNumberOfPoints()):
-            point = self.parent.mesh.GetPoint(i)
-            if frustum.EvaluateFunction(point[0], point[1], point[2]) < 0:
-                selected_points.InsertNextPoint(point)
-
-    def point_in_selection(self, point, selection):
-        for i in range(selection.GetNumberOfPoints()):
-            if point == selection.GetPoint(i):
-                return True
-        return False
-
-    def highlight_selected_points(self, new_points):
-        current_selection_type = self.parent.get_current_selection_type()
-        current_selection = self.selected_points[current_selection_type]
-
-        for i in range(new_points.GetNumberOfPoints()):
-            point = new_points.GetPoint(i)
-            current_selection.InsertNextPoint(point)
-
-        self.selected_points_history.append((current_selection_type, new_points))
-        self.update_visualization()
-
-    def update_visualization(self):
-        for selection_type, points in self.selected_points.items():
-            if points.GetNumberOfPoints() > 0:
-                self.visualize_selection(selection_type, points)
-
-    def visualize_selection(self, selection_type, points):
-        point_polydata = vtk.vtkPolyData()
-        point_polydata.SetPoints(points)
-
-        vertex_filter = vtk.vtkVertexGlyphFilter()
-        vertex_filter.SetInputData(point_polydata)
-        vertex_filter.Update()
-
-        mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInputConnection(vertex_filter.GetOutputPort())
-
-        if self.selected_vertex_actors[selection_type]:
-            self.renderer.RemoveActor(self.selected_vertex_actors[selection_type])
-
-        actor = vtk.vtkActor()
-        actor.SetMapper(mapper)
-        actor.GetProperty().SetColor(self.get_color_for_selection_type(selection_type))
-        actor.GetProperty().SetPointSize(5)
-
-        self.selected_vertex_actors[selection_type] = actor
-        self.renderer.AddActor(actor)
-        self.GetInteractor().GetRenderWindow().Render()
-
-    def get_color_for_selection_type(self, selection_type):
-        colors = [
-            (1, 0, 0),  # Red
-            (0, 1, 0),  # Green
-            (0, 0, 1),  # Blue
-            (1, 1, 0),  # Yellow
-            (1, 0, 1),  # Magenta
-            (0, 1, 1),  # Cyan
-            (1, 0.5, 0),  # Orange
-            (0.5, 0, 1),  # Purple
-            (0, 0.5, 0),  # Dark Green
-            (0.5, 0.5, 0),  # Olive
-            (0.5, 0, 0.5),  # Plum
-            (0, 0.5, 0.5),  # Teal
-            (1, 0.5, 0.5),  # Pink
-            (0.5, 1, 0.5),  # Light Green
-            (0.5, 0.5, 1),  # Light Blue
-            (0.7, 0.7, 0.7),  # Light Gray
-        ]
-        return colors[selection_type]
-
-    def clear_all_selections(self):
-        for selection_type in self.selected_points:
-            self.selected_points[selection_type].Reset()
-            if self.selected_vertex_actors[selection_type]:
-                self.renderer.RemoveActor(self.selected_vertex_actors[selection_type])
-                self.selected_vertex_actors[selection_type] = None
-        self.selected_points_history.clear()
-        self.GetInteractor().GetRenderWindow().Render()
-
-    def clear_last_selection(self):
-        if self.selected_points_history:
-            last_selection_type, last_selection = self.selected_points_history.pop()
-            new_points = vtk.vtkPoints()
-            current_points = self.selected_points[last_selection_type]
-
-            for i in range(current_points.GetNumberOfPoints()):
-                point = current_points.GetPoint(i)
-                if not self.point_in_selection(point, last_selection):
-                    new_points.InsertNextPoint(point)
-
-            self.selected_points[last_selection_type] = new_points
-            self.update_visualization()
-
 
 class CustomQVTKRenderWindowInteractor(QVTKRenderWindowInteractor):
     def __init__(self, parent=None, **kw):
@@ -489,10 +317,123 @@ class MainWindow(QMainWindow):
 
         self.splitter.setStretchFactor(1, 1)
 
-        self.init_params_ui()
-        self.init_picking_mode_selector()
-        self.init_selection_buttons()
-        self.init_selection_type_selector()
+        # Volume ID selection
+        self.control_layout.addWidget(QLabel("Volume ID:"))
+        self.volume_combo = QComboBox()
+        self.volume_combo.addItems(the_index.keys())
+        self.volume_combo.currentTextChanged.connect(self.update_timestamp_combo)
+        self.control_layout.addWidget(self.volume_combo)
+
+        # Timestamp selection
+        self.control_layout.addWidget(QLabel("Timestamp:"))
+        self.timestamp_combo = QComboBox()
+        self.control_layout.addWidget(self.timestamp_combo)
+        self.timestamp_combo.currentTextChanged.connect(self.update_dimensions)
+
+        # Volume dimensions display
+        self.vol_dim_label = QLabel("Volume Dimensions (z,y,x):")
+        self.control_layout.addWidget(self.vol_dim_label)
+
+        # Offset dimensions input
+        self.control_layout.addWidget(QLabel("Offset Dimensions (z,y,x):"))
+        offset_layout = QHBoxLayout()
+        self.offset_z = QLineEdit("0")
+        self.offset_y = QLineEdit("0")
+        self.offset_x = QLineEdit("0")
+        for offset in [self.offset_z, self.offset_y, self.offset_x]:
+            # offset.setValidator(QIntValidator(0, 999999))
+            offset_layout.addWidget(offset)
+        self.control_layout.addLayout(offset_layout)
+
+        # Chunk size input
+        self.control_layout.addWidget(QLabel("Chunk size (z,y,x):"))
+        chunk_layout = QHBoxLayout()
+        self.chunk_z = QLineEdit("128")
+        self.chunk_y = QLineEdit("128")
+        self.chunk_x = QLineEdit("128")
+        for chunk in [self.chunk_z, self.chunk_y, self.chunk_x]:
+            # chunk.setValidator(QIntValidator(1, 999999))
+            chunk_layout.addWidget(chunk)
+        self.control_layout.addLayout(chunk_layout)
+
+        # Isolevel slider and value display
+        iso_layout = QHBoxLayout()
+        iso_layout.addWidget(QLabel("Isolevel:"))
+        self.isolevel_slider = QSlider(Qt.Orientation.Horizontal)
+        self.isolevel_slider.setRange(0, 255)
+        self.isolevel_slider.setValue(100)
+        self.isolevel_slider.valueChanged.connect(self.update_isolevel_label)
+        iso_layout.addWidget(self.isolevel_slider)
+        self.isolevel_label = QLabel("100")
+        iso_layout.addWidget(self.isolevel_label)
+        self.control_layout.addLayout(iso_layout)
+
+        # Downscaling factor slider and value display
+        downscale_layout = QHBoxLayout()
+        downscale_layout.addWidget(QLabel("Downscaling factor:"))
+        self.downscale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.downscale_slider.setRange(1, 8)
+        self.downscale_slider.setValue(1)
+        self.downscale_slider.valueChanged.connect(self.update_downscale_label)
+        downscale_layout.addWidget(self.downscale_slider)
+        self.downscale_label = QLabel("1")
+        downscale_layout.addWidget(self.downscale_label)
+        self.control_layout.addLayout(downscale_layout)
+
+        self.control_layout.addWidget(QLabel("Scaling Factors (z,y,x):"))
+        scale_layout = QHBoxLayout()
+        self.scale_z = QLineEdit("1")
+        self.scale_y = QLineEdit("1")
+        self.scale_x = QLineEdit("1")
+        for scale in [self.scale_z, self.scale_y, self.scale_x]:
+            scale_layout.addWidget(scale)
+        self.control_layout.addLayout(scale_layout)
+
+        self.load_button = QPushButton("Load Data")
+        self.load_button.clicked.connect(self.load_voxel_data)
+        self.control_layout.addWidget(self.load_button)
+
+        self.color_source_checkbox = QCheckBox("Use Zarr for Coloring")
+        self.color_source_checkbox.setChecked(True)
+        self.control_layout.addWidget(self.color_source_checkbox)
+
+        self.update_timestamp_combo(self.volume_combo.currentText())
+        self.picking_mode_selector = QComboBox()
+        self.picking_mode_selector.addItems(["None", "Through", "Surface"])
+        self.picking_mode_selector.currentTextChanged.connect(self.change_picking_mode)
+        self.control_layout.addWidget(QLabel("Picking Mode:"))
+        self.control_layout.addWidget(self.picking_mode_selector)
+
+        self.clear_all_selections_button = QPushButton("Clear All Selections")
+        self.clear_all_selections_button.clicked.connect(self.clear_all_selections)
+        self.control_layout.addWidget(self.clear_all_selections_button)
+
+        self.clear_last_selection_button = QPushButton("Clear Last Selection")
+        self.clear_last_selection_button.clicked.connect(self.clear_last_selection)
+        self.control_layout.addWidget(self.clear_last_selection_button)
+
+        self.write_selection_button = QPushButton("Write Selection")
+        self.write_selection_button.clicked.connect(self.write_selection)
+        self.control_layout.addWidget(self.write_selection_button)
+
+        self.delete_selection_button = QPushButton("Delete Selected Points")
+        self.delete_selection_button.clicked.connect(self.delete_selected_points)
+        self.control_layout.addWidget(self.delete_selection_button)
+
+        self.expand_selection_button = QPushButton("Expand Current Selection")
+        self.expand_selection_button.clicked.connect(self.expand_selection_to_connected)
+        self.control_layout.addWidget(self.expand_selection_button)
+
+        self.expand_all_selections_button = QPushButton("Expand All Selections")
+        self.expand_all_selections_button.clicked.connect(self.expand_all_selections)
+        self.control_layout.addWidget(self.expand_all_selections_button)
+
+        self.selection_type_selector = QComboBox()
+        self.selection_type_selector.addItems([f"Selection {i}" for i in range(16)])
+        self.selection_type_selector.currentIndexChanged.connect(self.set_current_selection_type)
+        self.control_layout.addWidget(QLabel("Selection Type:"))
+        self.control_layout.addWidget(self.selection_type_selector)
+
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFocus()
 
@@ -500,9 +441,8 @@ class MainWindow(QMainWindow):
         self.vtk_widget.GetRenderWindow().AddRenderer(self.renderer)
         self.interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
 
-
         self.camera_style = vtk.vtkInteractorStyleTrackballCamera()
-        self.picking_style = PickingInteractorStyle(self, self.renderer)
+        self.picking_style = PickingInteractorStyle(self)
         self.interactor.SetInteractorStyle(self.camera_style)
 
         self.voxel_data = None
@@ -515,9 +455,64 @@ class MainWindow(QMainWindow):
 
         self.picking_enabled = False
 
+        self.labeled_points = {i: vtk.vtkPoints() for i in range(16)}
+        self.selected_vertex_actors = {i: None for i in range(16)}
+        self.current_selection_type = 0
+        self.rubber_band_actor = None
+        self.picking_mode = "None"
+
+    def highlight_selected_points(self, new_points):
+        current_labels = self.labeled_points[self.current_selection_type]
+
+        for i in range(new_points.GetNumberOfPoints()):
+            point = new_points.GetPoint(i)
+            current_labels.InsertNextPoint(point)
+
+        self.update_visualization()
+
+    def update_visualization(self):
+        for selection_type, points in self.labeled_points.items():
+            if points.GetNumberOfPoints() > 0:
+                self.visualize_selection(selection_type, points)
+
     def clear_scene(self):
         self.renderer.RemoveAllViewProps()
         self.renderer.RemoveAllLights()
+
+    def clear_all_selections(self):
+        pass
+
+    def clear_last_selection(self):
+        pass
+
+    def visualize_selection(self, selection_type, points):
+        point_polydata = vtk.vtkPolyData()
+        point_polydata.SetPoints(points)
+
+        vertex_filter = vtk.vtkVertexGlyphFilter()
+        vertex_filter.SetInputData(point_polydata)
+        vertex_filter.Update()
+
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(vertex_filter.GetOutputPort())
+
+        if self.selected_vertex_actors[selection_type]:
+            self.renderer.RemoveActor(self.selected_vertex_actors[selection_type])
+
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(get_color_for_selection_type(selection_type))
+        actor.GetProperty().SetPointSize(5)
+
+        self.selected_vertex_actors[selection_type] = actor
+        self.renderer.AddActor(actor)
+        self.interactor.GetRenderWindow().Render()
+
+    def get_current_selection_type(self):
+        return self.current_selection_type
+
+    def set_current_selection_type(self, selection_type):
+        self.current_selection_type = selection_type
 
     def add_coordinate_system(self, mesh_bounds):
 
@@ -584,146 +579,6 @@ class MainWindow(QMainWindow):
             light.SetPosition(mesh_bounds[1], mesh_bounds[3], mesh_bounds[5])
             self.renderer.AddLight(light)
 
-    def init_selection_type_selector(self):
-        self.selection_type_selector = QComboBox()
-        self.selection_type_selector.addItems([f"Selection {i}" for i in range(16)])
-        self.control_layout.addWidget(QLabel("Selection Type:"))
-        self.control_layout.addWidget(self.selection_type_selector)
-
-    def get_current_selection_type(self):
-        return self.selection_type_selector.currentIndex()
-
-    def init_selection_buttons(self):
-        self.clear_all_selections_button = QPushButton("Clear All Selections")
-        self.clear_all_selections_button.clicked.connect(self.clear_all_selections)
-        self.control_layout.addWidget(self.clear_all_selections_button)
-
-        self.clear_last_selection_button = QPushButton("Clear Last Selection")
-        self.clear_last_selection_button.clicked.connect(self.clear_last_selection)
-        self.control_layout.addWidget(self.clear_last_selection_button)
-
-        self.write_selection_button = QPushButton("Write Selection")
-        self.write_selection_button.clicked.connect(self.write_selection)
-        self.control_layout.addWidget(self.write_selection_button)
-
-        self.delete_selection_button = QPushButton("Delete Selected Points")
-        self.delete_selection_button.clicked.connect(self.delete_selected_points)
-        self.control_layout.addWidget(self.delete_selection_button)
-
-        self.expand_selection_button = QPushButton("Expand Current Selection")
-        self.expand_selection_button.clicked.connect(self.expand_selection_to_connected)
-        self.control_layout.addWidget(self.expand_selection_button)
-
-        self.expand_all_selections_button = QPushButton("Expand All Selections")
-        self.expand_all_selections_button.clicked.connect(self.expand_all_selections)
-        self.control_layout.addWidget(self.expand_all_selections_button)
-
-    def expand_all_selections(self):
-        if not hasattr(self.interactor.GetInteractorStyle(), 'selected_points'):
-            print("No points selected for expansion.")
-            return
-
-        total_expanded = 0
-        for selection_type in range(16):  # Assuming we have 16 selection types
-            current_selection = self.interactor.GetInteractorStyle().selected_points[selection_type]
-
-            if current_selection.GetNumberOfPoints() == 0:
-                continue  # Skip empty selections
-
-            # Create a set to store the IDs of selected points
-            selected_point_ids = set()
-            for i in range(current_selection.GetNumberOfPoints()):
-                point = current_selection.GetPoint(i)
-                point_id = self.mesh.FindPoint(point)
-                selected_point_ids.add(point_id)
-
-            # Create a set to store the new point IDs
-            new_point_ids = set()
-
-            # Iterate through all cells in the mesh
-            for cell_id in range(self.mesh.GetNumberOfCells()):
-                cell = self.mesh.GetCell(cell_id)
-                cell_point_ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
-
-                # If any point of the cell is in the current selection, add all points of the cell
-                if any(point_id in selected_point_ids for point_id in cell_point_ids):
-                    new_point_ids.update(cell_point_ids)
-
-            # Create a new vtkPoints object for the expanded selection
-            expanded_points = vtk.vtkPoints()
-            for point_id in new_point_ids:
-                expanded_points.InsertNextPoint(self.mesh.GetPoint(point_id))
-
-            # Update the selection for the current selection type in the interactor style
-            self.interactor.GetInteractorStyle().selected_points[selection_type] = expanded_points
-
-            total_expanded += expanded_points.GetNumberOfPoints() - current_selection.GetNumberOfPoints()
-
-        self.interactor.GetInteractorStyle().update_visualization()
-
-        print(f"All selections expanded. Total new points added: {total_expanded}")
-
-    def expand_selection_to_connected(self):
-        if not hasattr(self.interactor.GetInteractorStyle(), 'selected_points'):
-            print("No points selected for expansion.")
-            return
-
-        current_selection_type = self.get_current_selection_type()
-        current_selection = self.interactor.GetInteractorStyle().selected_points[current_selection_type]
-
-        if current_selection.GetNumberOfPoints() == 0:
-            print("No points selected for expansion.")
-            return
-
-        # Create a set to store the IDs of selected points
-        selected_point_ids = set()
-        for i in range(current_selection.GetNumberOfPoints()):
-            point = current_selection.GetPoint(i)
-            point_id = self.mesh.FindPoint(point)
-            selected_point_ids.add(point_id)
-
-        # Create a set to store the new point IDs
-        new_point_ids = set()
-
-        # Iterate through all cells in the mesh
-        for cell_id in range(self.mesh.GetNumberOfCells()):
-            cell = self.mesh.GetCell(cell_id)
-            cell_point_ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
-
-            # If any point of the cell is in the current selection, add all points of the cell
-            if any(point_id in selected_point_ids for point_id in cell_point_ids):
-                new_point_ids.update(cell_point_ids)
-
-        # Create a new vtkPoints object for the expanded selection
-        expanded_points = vtk.vtkPoints()
-        for point_id in new_point_ids:
-            expanded_points.InsertNextPoint(self.mesh.GetPoint(point_id))
-
-        # Update the selection for the current selection type in the interactor style
-        self.interactor.GetInteractorStyle().selected_points[current_selection_type] = expanded_points
-        self.interactor.GetInteractorStyle().update_visualization()
-
-        print(
-            f"Selection expanded from {current_selection.GetNumberOfPoints()} to {expanded_points.GetNumberOfPoints()} vertices.")
-
-    def clear_all_selections(self):
-        if hasattr(self.interactor.GetInteractorStyle(), 'clear_all_selections'):
-            self.interactor.GetInteractorStyle().clear_all_selections()
-
-    def clear_last_selection(self):
-        if hasattr(self.interactor.GetInteractorStyle(), 'clear_last_selection'):
-            self.interactor.GetInteractorStyle().clear_last_selection()
-
-    def clear_selection(self):
-        if hasattr(self.interactor.GetInteractorStyle(), 'clear_selection'):
-            self.interactor.GetInteractorStyle().clear_selection()
-
-    def init_picking_mode_selector(self):
-        self.picking_mode_selector = QComboBox()
-        self.picking_mode_selector.addItems(["None", "Through", "Surface"])
-        self.picking_mode_selector.currentTextChanged.connect(self.change_picking_mode)
-        self.control_layout.addWidget(QLabel("Picking Mode:"))
-        self.control_layout.addWidget(self.picking_mode_selector)
 
     def change_picking_mode(self, mode):
         self.picking_mode = mode
@@ -733,93 +588,6 @@ class MainWindow(QMainWindow):
             self.interactor.SetInteractorStyle(self.picking_style)
         self.vtk_widget.GetRenderWindow().Render()
 
-    def init_params_ui(self):
-        # Volume ID selection
-        self.control_layout.addWidget(QLabel("Volume ID:"))
-        self.volume_combo = QComboBox()
-        self.volume_combo.addItems(the_index.keys())
-        self.volume_combo.currentTextChanged.connect(self.update_timestamp_combo)
-        self.control_layout.addWidget(self.volume_combo)
-
-        # Timestamp selection
-        self.control_layout.addWidget(QLabel("Timestamp:"))
-        self.timestamp_combo = QComboBox()
-        self.control_layout.addWidget(self.timestamp_combo)
-        self.timestamp_combo.currentTextChanged.connect(self.update_dimensions)
-
-        # Volume dimensions display
-        self.vol_dim_label = QLabel("Volume Dimensions (z,y,x):")
-        self.control_layout.addWidget(self.vol_dim_label)
-
-        # Offset dimensions input
-        self.control_layout.addWidget(QLabel("Offset Dimensions (z,y,x):"))
-        offset_layout = QHBoxLayout()
-        self.offset_z = QLineEdit("0")
-        self.offset_y = QLineEdit("0")
-        self.offset_x = QLineEdit("0")
-        for offset in [self.offset_z, self.offset_y, self.offset_x]:
-            #offset.setValidator(QIntValidator(0, 999999))
-            offset_layout.addWidget(offset)
-        self.control_layout.addLayout(offset_layout)
-
-        # Chunk size input
-        self.control_layout.addWidget(QLabel("Chunk size (z,y,x):"))
-        chunk_layout = QHBoxLayout()
-        self.chunk_z = QLineEdit("128")
-        self.chunk_y = QLineEdit("128")
-        self.chunk_x = QLineEdit("128")
-        for chunk in [self.chunk_z, self.chunk_y, self.chunk_x]:
-            #chunk.setValidator(QIntValidator(1, 999999))
-            chunk_layout.addWidget(chunk)
-        self.control_layout.addLayout(chunk_layout)
-
-        # Isolevel slider and value display
-        iso_layout = QHBoxLayout()
-        iso_layout.addWidget(QLabel("Isolevel:"))
-        self.isolevel_slider = QSlider(Qt.Orientation.Horizontal)
-        self.isolevel_slider.setRange(0, 255)
-        self.isolevel_slider.setValue(100)
-        self.isolevel_slider.valueChanged.connect(self.update_isolevel_label)
-        iso_layout.addWidget(self.isolevel_slider)
-        self.isolevel_label = QLabel("100")
-        iso_layout.addWidget(self.isolevel_label)
-        self.control_layout.addLayout(iso_layout)
-
-        # Downscaling factor slider and value display
-        downscale_layout = QHBoxLayout()
-        downscale_layout.addWidget(QLabel("Downscaling factor:"))
-        self.downscale_slider = QSlider(Qt.Orientation.Horizontal)
-        self.downscale_slider.setRange(1, 8)
-        self.downscale_slider.setValue(1)
-        self.downscale_slider.valueChanged.connect(self.update_downscale_label)
-        downscale_layout.addWidget(self.downscale_slider)
-        self.downscale_label = QLabel("1")
-        downscale_layout.addWidget(self.downscale_label)
-        self.control_layout.addLayout(downscale_layout)
-
-        self.init_scaling_factors()
-
-        self.load_button = QPushButton("Load Data")
-        self.load_button.clicked.connect(self.load_voxel_data)
-        self.control_layout.addWidget(self.load_button)
-
-        self.color_source_checkbox = QCheckBox("Use Zarr for Coloring")
-        self.color_source_checkbox.setChecked(True)
-        self.control_layout.addWidget(self.color_source_checkbox)
-
-
-        # Initialize combos
-        self.update_timestamp_combo(self.volume_combo.currentText())
-
-    def init_scaling_factors(self):
-        self.control_layout.addWidget(QLabel("Scaling Factors (z,y,x):"))
-        scale_layout = QHBoxLayout()
-        self.scale_z = QLineEdit("1")
-        self.scale_y = QLineEdit("1")
-        self.scale_x = QLineEdit("1")
-        for scale in [self.scale_z, self.scale_y, self.scale_x]:
-            scale_layout.addWidget(scale)
-        self.control_layout.addLayout(scale_layout)
 
     def update_isolevel_label(self, value):
         self.isolevel_label.setText(str(value))
@@ -857,47 +625,85 @@ class MainWindow(QMainWindow):
 
         return True
 
-    def write_selection(self):
-        if not hasattr(self.interactor.GetInteractorStyle(), 'selected_points'):
-            print("No points selected for writing.")
+    def expand_all_selections(self):
+        total_expanded = 0
+        for selection_type in range(16):  # Assuming we have 16 selection types
+            current_selection = self.labeled_points[selection_type]
+
+            if current_selection.GetNumberOfPoints() == 0:
+                continue  # Skip empty selections
+
+            # Create a set to store the IDs of selected points
+            selected_point_ids = set()
+            for i in range(current_selection.GetNumberOfPoints()):
+                point = current_selection.GetPoint(i)
+                point_id = self.mesh.FindPoint(point)
+                selected_point_ids.add(point_id)
+
+            # Create a set to store the new point IDs
+            new_point_ids = set()
+
+            # Iterate through all cells in the mesh
+            for cell_id in range(self.mesh.GetNumberOfCells()):
+                cell = self.mesh.GetCell(cell_id)
+                cell_point_ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
+
+                # If any point of the cell is in the current selection, add all points of the cell
+                if any(point_id in selected_point_ids for point_id in cell_point_ids):
+                    new_point_ids.update(cell_point_ids)
+
+            # Create a new vtkPoints object for the expanded selection
+            expanded_points = vtk.vtkPoints()
+            for point_id in new_point_ids:
+                expanded_points.InsertNextPoint(self.mesh.GetPoint(point_id))
+
+            # Update the selection for the current selection type in the interactor style
+            self.labeled_points[selection_type] = expanded_points
+
+            total_expanded += expanded_points.GetNumberOfPoints() - current_selection.GetNumberOfPoints()
+
+        self.update_visualization()
+
+        print(f"All selections expanded. Total new points added: {total_expanded}")
+
+    def expand_selection_to_connected(self):
+        current_selection_type = self.get_current_selection_type()
+        current_selection = self.labeled_points[current_selection_type]
+
+        if current_selection.GetNumberOfPoints() == 0:
+            print("No points selected for expansion.")
             return
 
-        selected_points = self.interactor.GetInteractorStyle().selected_points
+        # Create a set to store the IDs of selected points
+        selected_point_ids = set()
+        for i in range(current_selection.GetNumberOfPoints()):
+            point = current_selection.GetPoint(i)
+            point_id = self.mesh.FindPoint(point)
+            selected_point_ids.add(point_id)
 
-        if selected_points.GetNumberOfPoints() == 0:
-            print("No points selected for writing.")
-            return
+        # Create a set to store the new point IDs
+        new_point_ids = set()
 
-        volume_id = self.volume_combo.currentText()
-        timestamp = self.timestamp_combo.currentText()
-        offset_dims = [int(self.offset_z.text()), int(self.offset_y.text()), int(self.offset_x.text())]
-        chunk_dims = [int(self.chunk_z.text()), int(self.chunk_y.text()), int(self.chunk_x.text())]
+        # Iterate through all cells in the mesh
+        for cell_id in range(self.mesh.GetNumberOfCells()):
+            cell = self.mesh.GetCell(cell_id)
+            cell_point_ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
 
-        # Get the current mask
-        current_mask = self.volman.get_mask(volume_id, timestamp, offset_dims, chunk_dims)
+            # If any point of the cell is in the current selection, add all points of the cell
+            if any(point_id in selected_point_ids for point_id in cell_point_ids):
+                new_point_ids.update(cell_point_ids)
 
-        # Create a new mask for the selection
-        selection_mask = np.zeros_like(current_mask, dtype=np.uint16)
+        # Create a new vtkPoints object for the expanded selection
+        expanded_points = vtk.vtkPoints()
+        for point_id in new_point_ids:
+            expanded_points.InsertNextPoint(self.mesh.GetPoint(point_id))
 
-        # Convert selected points to voxel coordinates and mark them in the selection mask
-        num_points = selected_points.GetNumberOfPoints()
-        for i in range(num_points):
-            if i % 1000 == 0:
-                print(f"Processing point {i}/{num_points}")
-            point = selected_points.GetPoint(i)
-            voxel_coord = self.convert_to_voxel_space(point)
-            if all(0 <= c < d for c, d in zip(voxel_coord, selection_mask.shape)):
-                # Use 255 for selected voxels (indeterminate segment label)
-                selection_mask[voxel_coord[2], voxel_coord[1], voxel_coord[0]] = 255
+        # Update the selection for the current selection type in the interactor style
+        self.labeled_points[current_selection_type] = expanded_points
+        self.update_visualization()
 
-        # Combine the current mask with the selection mask
-        # Keep existing non-zero values, add new selections
-        combined_mask = np.where(selection_mask != 0, selection_mask, current_mask)
-
-        # Set the updated mask
-        self.volman.set_mask(volume_id,  timestamp,offset_dims, combined_mask)
-
-        print(f"Selection written to mask for {volume_id}/{timestamp}")
+        print(
+            f"Selection expanded from {current_selection.GetNumberOfPoints()} to {expanded_points.GetNumberOfPoints()} vertices.")
 
     def load_voxel_data(self, voxel_data=None):
         self.clear_scene()
@@ -920,8 +726,6 @@ class MainWindow(QMainWindow):
             self.voxel_data = self.volman.chunk(volume_id, timestamp, offset_dims, chunk_dims)
         else:
             self.voxel_data = voxel_data
-
-
 
         isolevel = self.isolevel_slider.value()
         downscale = self.downscale_slider.value()
@@ -1060,68 +864,6 @@ class MainWindow(QMainWindow):
 
         print("Mesh rendering completed")
 
-    def delete_selected_points(self):
-        if not hasattr(self.interactor.GetInteractorStyle(), 'selected_points'):
-            print("No points selected for deletion.")
-            return
-
-        selected_points = self.interactor.GetInteractorStyle().selected_points
-
-        if selected_points.GetNumberOfPoints() < 4:
-            print("At least 4 non-coplanar points are required for 3D Delaunay tetrahedralization.")
-            return
-
-        points = vtk.vtkPoints()
-        points.DeepCopy(selected_points)
-
-        point_set = vtk.vtkPolyData()
-        point_set.SetPoints(points)
-
-        delaunay = vtk.vtkDelaunay3D()
-        delaunay.SetInputData(point_set)
-        delaunay.Update()
-
-        del_output = delaunay.GetOutput()
-
-        surface_filter = vtk.vtkDataSetSurfaceFilter()
-        surface_filter.SetInputData(del_output)
-        surface_filter.Update()
-        surface = surface_filter.GetOutput()
-
-        implicit_distance = vtk.vtkImplicitPolyDataDistance()
-        implicit_distance.SetInput(surface)
-
-        bounds = del_output.GetBounds()
-        min_coords = np.array([bounds[4], bounds[2], bounds[0]])  # z, y, x
-        max_coords = np.array([bounds[5], bounds[3], bounds[1]])  # z, y, x
-
-        min_voxel = self.convert_to_voxel_space(min_coords)
-        max_voxel = self.convert_to_voxel_space(max_coords)
-
-        total_voxels = (max_voxel[0] - min_voxel[0] + 1) * (max_voxel[1] - min_voxel[1] + 1) * (
-                    max_voxel[2] - min_voxel[2] + 1)
-        processed_voxels = 0
-
-        for z in range(max(0, min_voxel[0]), min(self.voxel_data.shape[0], max_voxel[0] + 1)):
-            for y in range(max(0, min_voxel[1]), min(self.voxel_data.shape[1], max_voxel[1] + 1)):
-                for x in range(max(0, min_voxel[2]), min(self.voxel_data.shape[2], max_voxel[2] + 1)):
-                    world_coord = self.convert_to_world_space((z, y, x))
-
-                    if implicit_distance.EvaluateFunction(world_coord) <= 0:
-                        self.voxel_data[z, y, x] = 0
-
-                    processed_voxels += 1
-                    if processed_voxels % 10000 == 0:
-                        print(f"Progress: {processed_voxels / total_voxels * 100:.2f}%")
-
-        print("Deleted selected volume. Regenerating mesh...")
-
-        # Re-run the load_voxel_data method to regenerate the mesh
-        self.load_voxel_data(self.voxel_data)
-
-        # Clear the selection after deletion
-        self.interactor.GetInteractorStyle().clear_all_selections()
-
     def convert_to_world_space(self, voxel_coord):
         z, y, x = voxel_coord
         bounds = self.mesh.GetBounds()
@@ -1139,6 +881,110 @@ class MainWindow(QMainWindow):
         voxel_y = int(round((y - bounds[2]) / (bounds[3] - bounds[2]) * (self.voxel_data.shape[1] - 1) * scaling_factors[1]))
         voxel_z = int(round((z - bounds[4]) / (bounds[5] - bounds[4]) * (self.voxel_data.shape[0] - 1) * scaling_factors[0]))
         return (voxel_z, voxel_y, voxel_x)
+
+    def draw_rubber_band(self, start_position, end_position):
+        if not start_position or not end_position or not self.renderer:
+            return
+
+        if self.rubber_band_actor:
+            self.renderer.RemoveActor(self.rubber_band_actor)
+
+        points = vtk.vtkPoints()
+        points.InsertNextPoint(start_position[0], start_position[1], 0)
+        points.InsertNextPoint(end_position[0], start_position[1], 0)
+        points.InsertNextPoint(end_position[0], end_position[1], 0)
+        points.InsertNextPoint(start_position[0], end_position[1], 0)
+
+        lines = vtk.vtkCellArray()
+        lines.InsertNextCell(5)
+        lines.InsertCellPoint(0)
+        lines.InsertCellPoint(1)
+        lines.InsertCellPoint(2)
+        lines.InsertCellPoint(3)
+        lines.InsertCellPoint(0)
+
+        rubber_band = vtk.vtkPolyData()
+        rubber_band.SetPoints(points)
+        rubber_band.SetLines(lines)
+
+        mapper = vtk.vtkPolyDataMapper2D()
+        mapper.SetInputData(rubber_band)
+
+        self.rubber_band_actor = vtk.vtkActor2D()
+        self.rubber_band_actor.SetMapper(mapper)
+        self.rubber_band_actor.GetProperty().SetColor(1, 1, 1)
+        self.rubber_band_actor.GetProperty().SetLineWidth(2)
+
+        self.renderer.AddActor(self.rubber_band_actor)
+        self.interactor.GetRenderWindow().Render()
+
+    def remove_rubber_band(self):
+        if self.rubber_band_actor and self.renderer:
+            self.renderer.RemoveActor(self.rubber_band_actor)
+            self.rubber_band_actor = None
+            self.interactor.GetRenderWindow().Render()
+
+    def perform_vertex_pick(self, start_position, end_position):
+        if not start_position or not end_position or not self.renderer:
+            return
+
+        picker = vtk.vtkAreaPicker()
+        picker.AreaPick(min(start_position[0], end_position[0]),
+                        min(start_position[1], end_position[1]),
+                        max(start_position[0], end_position[0]),
+                        max(start_position[1], end_position[1]),
+                        self.renderer)
+
+        selected_points = vtk.vtkPoints()
+
+        if self.picking_mode == "Surface":
+            self.perform_surface_vertex_pick(selected_points, picker, start_position, end_position)
+        else:
+            self.perform_through_vertex_pick(selected_points, picker.GetFrustum())
+
+        print(f"Number of selected vertices: {selected_points.GetNumberOfPoints()}")
+
+        self.highlight_selected_points(selected_points)
+
+    def perform_surface_vertex_pick(self, selected_points, picker, start_position, end_position):
+        if not self.renderer:
+            print("No renderer available for surface picking")
+            return
+
+        hw_selector = vtk.vtkHardwareSelector()
+        hw_selector.SetRenderer(self.renderer)
+        hw_selector.SetArea(int(min(start_position[0], end_position[0])),
+                            int(min(start_position[1], end_position[1])),
+                            int(max(start_position[0], end_position[0])),
+                            int(max(start_position[1], end_position[1])))
+
+        hw_selector.SetFieldAssociation(vtk.vtkDataObject.FIELD_ASSOCIATION_POINTS)
+
+        selection = hw_selector.Select()
+
+        if selection and selection.GetNumberOfNodes() > 0:
+            selection_node = selection.GetNode(0)
+            id_array = selection_node.GetSelectionList()
+
+            if id_array:
+                for i in range(id_array.GetNumberOfTuples()):
+                    point_id = id_array.GetValue(i)
+                    point = self.mesh.GetPoint(point_id)
+                    selected_points.InsertNextPoint(point)
+
+        print(f"Surface picking selected {selected_points.GetNumberOfPoints()} points")
+
+    def perform_through_vertex_pick(self, selected_points, frustum):
+        for i in range(self.mesh.GetNumberOfPoints()):
+            point = self.mesh.GetPoint(i)
+            if frustum.EvaluateFunction(point[0], point[1], point[2]) < 0:
+                selected_points.InsertNextPoint(point)
+
+    def write_selection(self):
+        pass
+
+    def delete_selected_points(self):
+        pass
 
 
 if __name__ == "__main__":
