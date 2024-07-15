@@ -18,12 +18,6 @@ import numpy as np
 from PIL import Image
 from skimage.measure import label
 
-from vtkmodules.vtkFiltersCore import (
-    vtkDelaunay3D,
-    vtkGlyph3D,
-    vtkTubeFilter
-)
-
 
 USER = os.environ.get('SCROLLPRIZE_USER')
 PASS = os.environ.get('SCROLLPRIZE_PASS')
@@ -275,7 +269,8 @@ class PickingInteractorStyle(vtk.vtkInteractorStyleRubberBandPick):
     def left_button_release_event(self, obj, event):
         if self.is_picking:
             self.end_position = self.GetInteractor().GetEventPosition()
-            self.parent.perform_vertex_pick(self.start_position, self.end_position)
+            selected_points = self.parent.perform_vertex_pick(self.start_position, self.end_position)
+            self.parent.add_points(selected_points)
             self.start_position = None
             self.end_position = None
             self.parent.remove_rubber_band()
@@ -445,13 +440,14 @@ class MainWindow(QMainWindow):
         self.picking_style = PickingInteractorStyle(self)
         self.interactor.SetInteractorStyle(self.camera_style)
 
+        self.volman = VolMan('D:/vesuvius.volman')
+
         self.voxel_data = None
+        self.label_data = None
         self.mesh = None
         self.zarray = None
         self.selected_vertex_actor = None
         self.delete_mask = None
-
-        self.volman = VolMan('D:/vesuvius.volman')
 
         self.picking_enabled = False
 
@@ -461,23 +457,38 @@ class MainWindow(QMainWindow):
         self.rubber_band_actor = None
         self.picking_mode = "None"
 
-    def highlight_selected_points(self, new_points):
-        current_labels = self.labeled_points[self.current_selection_type]
+    def reset(self):
+        self.voxel_data = None
+        self.label_data = None
+        self.mesh = None
+        self.zarray = None
+        self.selected_vertex_actor = None
+        self.delete_mask = None
 
-        for i in range(new_points.GetNumberOfPoints()):
-            point = new_points.GetPoint(i)
-            current_labels.InsertNextPoint(point)
+        self.picking_enabled = False
 
+        self.labeled_points = {i: vtk.vtkPoints() for i in range(16)}
+        self.selected_vertex_actors = {i: None for i in range(16)}
+        self.current_selection_type = 0
+        self.rubber_band_actor = None
+        self.picking_mode = "None"
+
+        self.renderer.RemoveAllViewProps()
+        self.renderer.RemoveAllLights()
+
+    def add_points(self, new_points):
+        num_new_points = new_points.GetNumberOfPoints()
+        if num_new_points == 0:
+            return
+        current_points = self.labeled_points[self.current_selection_type]
+        num_existing_points = current_points.GetNumberOfPoints()
+        current_points.InsertPoints(num_existing_points, num_new_points, 0, new_points)
         self.update_visualization()
 
     def update_visualization(self):
         for selection_type, points in self.labeled_points.items():
             if points.GetNumberOfPoints() > 0:
                 self.visualize_selection(selection_type, points)
-
-    def clear_scene(self):
-        self.renderer.RemoveAllViewProps()
-        self.renderer.RemoveAllLights()
 
     def clear_all_selections(self):
         pass
@@ -627,7 +638,17 @@ class MainWindow(QMainWindow):
 
     def expand_all_selections(self):
         total_expanded = 0
-        for selection_type in range(16):  # Assuming we have 16 selection types
+
+        # First, collect all currently labeled points
+        #for selection_type in range(16):
+        #    current_selection = self.labeled_points[selection_type]
+        #    for i in range(current_selection.GetNumberOfPoints()):
+        #        point = current_selection.GetPoint(i)
+        #        point = (int(round(point[0])), int(round(point[1])), int(round(point[2])))
+        #        found_point = self.mesh.FindPoint(point)
+        #        self.all_labeled_points.add(found_point)
+
+        for selection_type in range(16):
             current_selection = self.labeled_points[selection_type]
 
             if current_selection.GetNumberOfPoints() == 0:
@@ -649,67 +670,33 @@ class MainWindow(QMainWindow):
                 cell_point_ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
 
                 # If any point of the cell is in the current selection, add all points of the cell
+                # that are not already labeled
                 if any(point_id in selected_point_ids for point_id in cell_point_ids):
-                    new_point_ids.update(cell_point_ids)
+                    for point_id in cell_point_ids:
+                        new_point_ids.add(point_id)
 
             # Create a new vtkPoints object for the expanded selection
             expanded_points = vtk.vtkPoints()
-            for point_id in new_point_ids:
+            for point_id in selected_point_ids.union(new_point_ids):
                 expanded_points.InsertNextPoint(self.mesh.GetPoint(point_id))
 
-            # Update the selection for the current selection type in the interactor style
+            # Update the selection for the current selection type
             self.labeled_points[selection_type] = expanded_points
 
-            total_expanded += expanded_points.GetNumberOfPoints() - current_selection.GetNumberOfPoints()
+            total_expanded += len(new_point_ids)
 
         self.update_visualization()
 
         print(f"All selections expanded. Total new points added: {total_expanded}")
 
     def expand_selection_to_connected(self):
-        current_selection_type = self.get_current_selection_type()
-        current_selection = self.labeled_points[current_selection_type]
-
-        if current_selection.GetNumberOfPoints() == 0:
-            print("No points selected for expansion.")
-            return
-
-        # Create a set to store the IDs of selected points
-        selected_point_ids = set()
-        for i in range(current_selection.GetNumberOfPoints()):
-            point = current_selection.GetPoint(i)
-            point_id = self.mesh.FindPoint(point)
-            selected_point_ids.add(point_id)
-
-        # Create a set to store the new point IDs
-        new_point_ids = set()
-
-        # Iterate through all cells in the mesh
-        for cell_id in range(self.mesh.GetNumberOfCells()):
-            cell = self.mesh.GetCell(cell_id)
-            cell_point_ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
-
-            # If any point of the cell is in the current selection, add all points of the cell
-            if any(point_id in selected_point_ids for point_id in cell_point_ids):
-                new_point_ids.update(cell_point_ids)
-
-        # Create a new vtkPoints object for the expanded selection
-        expanded_points = vtk.vtkPoints()
-        for point_id in new_point_ids:
-            expanded_points.InsertNextPoint(self.mesh.GetPoint(point_id))
-
-        # Update the selection for the current selection type in the interactor style
-        self.labeled_points[current_selection_type] = expanded_points
-        self.update_visualization()
-
-        print(
-            f"Selection expanded from {current_selection.GetNumberOfPoints()} to {expanded_points.GetNumberOfPoints()} vertices.")
+        pass
 
     def load_voxel_data(self, voxel_data=None):
-        self.clear_scene()
-
         if not self.validate_dimensions():
             return
+
+        self.reset()
 
         volume_id = self.volume_combo.currentText()
         timestamp = self.timestamp_combo.currentText()
@@ -737,6 +724,8 @@ class MainWindow(QMainWindow):
         component_sizes = np.bincount(labels.flatten())
         mask = np.isin(labels, np.where(component_sizes >= 32)[0])
         self.voxel_data = self.voxel_data * mask
+
+        self.label_data = np.where(self.voxel_data < isolevel, 0, 255).astype(np.uint8)
 
         try:
             verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel,
@@ -935,21 +924,21 @@ class MainWindow(QMainWindow):
                         max(start_position[1], end_position[1]),
                         self.renderer)
 
-        selected_points = vtk.vtkPoints()
 
         if self.picking_mode == "Surface":
-            self.perform_surface_vertex_pick(selected_points, picker, start_position, end_position)
+            selected_points = self.perform_surface_vertex_pick(picker, start_position, end_position)
         else:
-            self.perform_through_vertex_pick(selected_points, picker.GetFrustum())
+            selected_points = self.perform_through_vertex_pick(picker.GetFrustum())
 
         print(f"Number of selected vertices: {selected_points.GetNumberOfPoints()}")
+        return selected_points
 
-        self.highlight_selected_points(selected_points)
 
-    def perform_surface_vertex_pick(self, selected_points, picker, start_position, end_position):
+    def perform_surface_vertex_pick(self, picker, start_position, end_position):
         if not self.renderer:
             print("No renderer available for surface picking")
             return
+        selected_points = vtk.vtkPoints()
 
         hw_selector = vtk.vtkHardwareSelector()
         hw_selector.SetRenderer(self.renderer)
@@ -973,12 +962,16 @@ class MainWindow(QMainWindow):
                     selected_points.InsertNextPoint(point)
 
         print(f"Surface picking selected {selected_points.GetNumberOfPoints()} points")
+        return selected_points
 
-    def perform_through_vertex_pick(self, selected_points, frustum):
+    def perform_through_vertex_pick(self, frustum):
+        selected_points = vtk.vtkPoints()
         for i in range(self.mesh.GetNumberOfPoints()):
             point = self.mesh.GetPoint(i)
             if frustum.EvaluateFunction(point[0], point[1], point[2]) < 0:
                 selected_points.InsertNextPoint(point)
+
+        return selected_points
 
     def write_selection(self):
         pass
