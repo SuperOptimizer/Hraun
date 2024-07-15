@@ -16,6 +16,7 @@ import io
 import tifffile
 import numpy as np
 from PIL import Image
+from skimage.measure import label
 
 from vtkmodules.vtkFiltersCore import (
     vtkDelaunay3D,
@@ -499,6 +500,7 @@ class MainWindow(QMainWindow):
         self.vtk_widget.GetRenderWindow().AddRenderer(self.renderer)
         self.interactor = self.vtk_widget.GetRenderWindow().GetInteractor()
 
+
         self.camera_style = vtk.vtkInteractorStyleTrackballCamera()
         self.picking_style = PickingInteractorStyle(self, self.renderer)
         self.interactor.SetInteractorStyle(self.camera_style)
@@ -512,6 +514,75 @@ class MainWindow(QMainWindow):
         self.volman = VolMan('D:/vesuvius.volman')
 
         self.picking_enabled = False
+
+    def clear_scene(self):
+        self.renderer.RemoveAllViewProps()
+        self.renderer.RemoveAllLights()
+
+    def add_coordinate_system(self, mesh_bounds):
+
+        # Create bounding box with scales
+        cube_axes = vtk.vtkCubeAxesActor()
+        cube_axes.SetBounds(mesh_bounds)
+        cube_axes.SetCamera(self.renderer.GetActiveCamera())
+        cube_axes.SetXTitle("X")
+        cube_axes.SetYTitle("Y")
+        cube_axes.SetZTitle("Z")
+        cube_axes.SetFlyMode(vtk.vtkCubeAxesActor.VTK_FLY_OUTER_EDGES)
+        cube_axes.SetGridLineLocation(vtk.vtkCubeAxesActor.VTK_GRID_LINES_FURTHEST)
+        cube_axes.XAxisMinorTickVisibilityOff()
+        cube_axes.YAxisMinorTickVisibilityOff()
+        cube_axes.ZAxisMinorTickVisibilityOff()
+        self.renderer.AddActor(cube_axes)
+
+        # Create checkered grid
+        plane = vtk.vtkPlaneSource()
+        plane.SetOrigin(mesh_bounds[0], mesh_bounds[2], mesh_bounds[4])
+        plane.SetPoint1(mesh_bounds[1], mesh_bounds[2], mesh_bounds[4])
+        plane.SetPoint2(mesh_bounds[0], mesh_bounds[3], mesh_bounds[4])
+        plane.SetResolution(10, 10)
+
+        # Create a custom checkered texture
+        texture_size = 64
+        texture = vtk.vtkImageData()
+        texture.SetDimensions(texture_size, texture_size, 1)
+        texture.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 3)
+
+        for i in range(texture_size):
+            for j in range(texture_size):
+                if (i // (texture_size // 8) + j // (texture_size // 8)) % 2 == 0:
+                    texture.SetScalarComponentFromFloat(i, j, 0, 0, 200)
+                    texture.SetScalarComponentFromFloat(i, j, 0, 1, 200)
+                    texture.SetScalarComponentFromFloat(i, j, 0, 2, 200)
+                else:
+                    texture.SetScalarComponentFromFloat(i, j, 0, 0, 100)
+                    texture.SetScalarComponentFromFloat(i, j, 0, 1, 100)
+                    texture.SetScalarComponentFromFloat(i, j, 0, 2, 100)
+
+        texture_object = vtk.vtkTexture()
+        texture_object.SetInputData(texture)
+        texture_object.InterpolateOn()
+
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(plane.GetOutputPort())
+
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.SetTexture(texture_object)
+        self.renderer.AddActor(actor)
+
+        # Adjust camera and add light
+        self.renderer.GetActiveCamera().Elevation(20)
+        self.renderer.GetActiveCamera().Azimuth(20)
+        self.renderer.ResetCamera()
+
+        if self.renderer.GetLights().GetNumberOfItems() == 0:
+            light = vtk.vtkLight()
+            light.SetFocalPoint((mesh_bounds[1] + mesh_bounds[0]) / 2,
+                                (mesh_bounds[3] + mesh_bounds[2]) / 2,
+                                (mesh_bounds[5] + mesh_bounds[4]) / 2)
+            light.SetPosition(mesh_bounds[1], mesh_bounds[3], mesh_bounds[5])
+            self.renderer.AddLight(light)
 
     def init_selection_type_selector(self):
         self.selection_type_selector = QComboBox()
@@ -632,7 +703,8 @@ class MainWindow(QMainWindow):
         self.interactor.GetInteractorStyle().selected_points[current_selection_type] = expanded_points
         self.interactor.GetInteractorStyle().update_visualization()
 
-        print(f"Selection expanded from {current_selection.GetNumberOfPoints()} to {expanded_points.GetNumberOfPoints()} vertices.")
+        print(
+            f"Selection expanded from {current_selection.GetNumberOfPoints()} to {expanded_points.GetNumberOfPoints()} vertices.")
 
     def clear_all_selections(self):
         if hasattr(self.interactor.GetInteractorStyle(), 'clear_all_selections'):
@@ -725,6 +797,8 @@ class MainWindow(QMainWindow):
         downscale_layout.addWidget(self.downscale_label)
         self.control_layout.addLayout(downscale_layout)
 
+        self.init_scaling_factors()
+
         self.load_button = QPushButton("Load Data")
         self.load_button.clicked.connect(self.load_voxel_data)
         self.control_layout.addWidget(self.load_button)
@@ -736,6 +810,16 @@ class MainWindow(QMainWindow):
 
         # Initialize combos
         self.update_timestamp_combo(self.volume_combo.currentText())
+
+    def init_scaling_factors(self):
+        self.control_layout.addWidget(QLabel("Scaling Factors (z,y,x):"))
+        scale_layout = QHBoxLayout()
+        self.scale_z = QLineEdit("1")
+        self.scale_y = QLineEdit("1")
+        self.scale_x = QLineEdit("1")
+        for scale in [self.scale_z, self.scale_y, self.scale_x]:
+            scale_layout.addWidget(scale)
+        self.control_layout.addLayout(scale_layout)
 
     def update_isolevel_label(self, value):
         self.isolevel_label.setText(str(value))
@@ -816,6 +900,8 @@ class MainWindow(QMainWindow):
         print(f"Selection written to mask for {volume_id}/{timestamp}")
 
     def load_voxel_data(self, voxel_data=None):
+        self.clear_scene()
+
         if not self.validate_dimensions():
             return
 
@@ -823,21 +909,31 @@ class MainWindow(QMainWindow):
         timestamp = self.timestamp_combo.currentText()
         offset_dims = [int(self.offset_z.text()), int(self.offset_y.text()), int(self.offset_x.text())]
         chunk_dims = [int(self.chunk_z.text()), int(self.chunk_y.text()), int(self.chunk_x.text())]
+        scaling_factors = [float(self.scale_z.text()), float(self.scale_y.text()), float(self.scale_x.text())]
 
         print(f"Loading data for {volume_id}, timestamp {timestamp}")
         print(f"Offsets: {offset_dims}")
         print(f"Chunk size: {chunk_dims}")
+        print(f"Scaling factors: {scaling_factors}")
 
         if voxel_data is False:
             self.voxel_data = self.volman.chunk(volume_id, timestamp, offset_dims, chunk_dims)
         else:
             self.voxel_data = voxel_data
 
+
+
         isolevel = self.isolevel_slider.value()
         downscale = self.downscale_slider.value()
         print(f"Using isolevel: {isolevel}, Downscaling factor: {downscale}")
         mask = self.voxel_data > 0
         self.voxel_data[self.voxel_data < isolevel] = 0
+
+        labels = label(self.voxel_data > isolevel)
+        component_sizes = np.bincount(labels.flatten())
+        mask = np.isin(labels, np.where(component_sizes >= 32)[0])
+        self.voxel_data = self.voxel_data * mask
+
         try:
             verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel,
                                                                    step_size=downscale, mask=mask)
@@ -845,6 +941,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid marching cubes data", "The given chunk did not yield any triangles")
             return
         print("Marching cubes completed successfully.")
+
+        # Apply scaling factors to vertices
+        verts[:, 0] *= scaling_factors[2]  # x
+        verts[:, 1] *= scaling_factors[1]  # y
+        verts[:, 2] *= scaling_factors[0]  # z
 
         points = vtk.vtkPoints()
         points.SetData(numpy_support.numpy_to_vtk(verts, deep=True))
@@ -942,12 +1043,18 @@ class MainWindow(QMainWindow):
 
         self.renderer.ResetCamera()
 
-        # Adjust the view to match the desired orientation
-        camera.Elevation(-20)  # Tilt down slightly
-        camera.Azimuth(20)  # Rotate slightly to the right
-        camera.Dolly(1.2)  # Zoom in a bit
+        self.renderer.GetActiveCamera().Elevation(20)
+        self.renderer.GetActiveCamera().Azimuth(20)
+        self.renderer.ResetCamera()
+
+        #light = vtk.vtkLight()
+        #light.SetFocalPoint(0, 0, 0)
+        #light.SetPosition(1, 1, 1)
+        #self.renderer.AddLight(light)
 
         self.renderer.ResetCameraClippingRange()
+
+        self.add_coordinate_system(self.mesh.GetBounds())
 
         self.vtk_widget.GetRenderWindow().Render()
 
@@ -964,59 +1071,47 @@ class MainWindow(QMainWindow):
             print("At least 4 non-coplanar points are required for 3D Delaunay tetrahedralization.")
             return
 
-        # Create a vtkPoints object and copy the selected points into it
         points = vtk.vtkPoints()
         points.DeepCopy(selected_points)
 
-        # Create a vtkPolyData to store the points
         point_set = vtk.vtkPolyData()
         point_set.SetPoints(points)
 
-        # Create a 3D Delaunay triangulation of the points
         delaunay = vtk.vtkDelaunay3D()
         delaunay.SetInputData(point_set)
         delaunay.Update()
 
-        # Get the output of the Delaunay triangulation
         del_output = delaunay.GetOutput()
 
-        # Extract the surface of the 3D Delaunay triangulation
         surface_filter = vtk.vtkDataSetSurfaceFilter()
         surface_filter.SetInputData(del_output)
         surface_filter.Update()
         surface = surface_filter.GetOutput()
 
-        # Create vtkImplicitPolyDataDistance
         implicit_distance = vtk.vtkImplicitPolyDataDistance()
         implicit_distance.SetInput(surface)
 
-        # Get the bounds of the Delaunay output
         bounds = del_output.GetBounds()
         min_coords = np.array([bounds[4], bounds[2], bounds[0]])  # z, y, x
         max_coords = np.array([bounds[5], bounds[3], bounds[1]])  # z, y, x
 
-        # Convert bounds to voxel space
         min_voxel = self.convert_to_voxel_space(min_coords)
         max_voxel = self.convert_to_voxel_space(max_coords)
 
-        # Create a progress bar or some other UI element to show progress
         total_voxels = (max_voxel[0] - min_voxel[0] + 1) * (max_voxel[1] - min_voxel[1] + 1) * (
                     max_voxel[2] - min_voxel[2] + 1)
         processed_voxels = 0
 
-        # Iterate through the voxels in the bounding box
         for z in range(max(0, min_voxel[0]), min(self.voxel_data.shape[0], max_voxel[0] + 1)):
             for y in range(max(0, min_voxel[1]), min(self.voxel_data.shape[1], max_voxel[1] + 1)):
                 for x in range(max(0, min_voxel[2]), min(self.voxel_data.shape[2], max_voxel[2] + 1)):
-                    # Convert voxel coordinates to world space
                     world_coord = self.convert_to_world_space((z, y, x))
 
-                    # Check if the point is inside the Delaunay mesh
                     if implicit_distance.EvaluateFunction(world_coord) <= 0:
                         self.voxel_data[z, y, x] = 0
 
                     processed_voxels += 1
-                    if processed_voxels % 10000 == 0:  # Update progress every 10000 voxels
+                    if processed_voxels % 10000 == 0:
                         print(f"Progress: {processed_voxels / total_voxels * 100:.2f}%")
 
         print("Deleted selected volume. Regenerating mesh...")
@@ -1030,17 +1125,19 @@ class MainWindow(QMainWindow):
     def convert_to_world_space(self, voxel_coord):
         z, y, x = voxel_coord
         bounds = self.mesh.GetBounds()
-        world_x = bounds[0] + (x / (self.voxel_data.shape[2] - 1)) * (bounds[1] - bounds[0])
-        world_y = bounds[2] + (y / (self.voxel_data.shape[1] - 1)) * (bounds[3] - bounds[2])
-        world_z = bounds[4] + (z / (self.voxel_data.shape[0] - 1)) * (bounds[5] - bounds[4])
+        scaling_factors = [float(self.scale_z.text()), float(self.scale_y.text()), float(self.scale_x.text())]
+        world_x = bounds[0] + (x / (self.voxel_data.shape[2] - 1)) * (bounds[1] - bounds[0]) / scaling_factors[2]
+        world_y = bounds[2] + (y / (self.voxel_data.shape[1] - 1)) * (bounds[3] - bounds[2]) / scaling_factors[1]
+        world_z = bounds[4] + (z / (self.voxel_data.shape[0] - 1)) * (bounds[5] - bounds[4]) / scaling_factors[0]
         return (world_x, world_y, world_z)
 
     def convert_to_voxel_space(self, world_coord):
         z, y, x = world_coord
         bounds = self.mesh.GetBounds()
-        voxel_x = int(round((x - bounds[0]) / (bounds[1] - bounds[0]) * (self.voxel_data.shape[2] - 1)))
-        voxel_y = int(round((y - bounds[2]) / (bounds[3] - bounds[2]) * (self.voxel_data.shape[1] - 1)))
-        voxel_z = int(round((z - bounds[4]) / (bounds[5] - bounds[4]) * (self.voxel_data.shape[0] - 1)))
+        scaling_factors = [float(self.scale_z.text()), float(self.scale_y.text()), float(self.scale_x.text())]
+        voxel_x = int(round((x - bounds[0]) / (bounds[1] - bounds[0]) * (self.voxel_data.shape[2] - 1) * scaling_factors[2]))
+        voxel_y = int(round((y - bounds[2]) / (bounds[3] - bounds[2]) * (self.voxel_data.shape[1] - 1) * scaling_factors[1]))
+        voxel_z = int(round((z - bounds[4]) / (bounds[5] - bounds[4]) * (self.voxel_data.shape[0] - 1) * scaling_factors[0]))
         return (voxel_z, voxel_y, voxel_x)
 
 
