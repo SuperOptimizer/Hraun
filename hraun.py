@@ -443,7 +443,6 @@ class MainWindow(QMainWindow):
         self.volman = VolMan('D:/vesuvius.volman')
 
         self.voxel_data = None
-        self.label_data = None
         self.mesh = None
         self.zarray = None
         self.selected_vertex_actor = None
@@ -456,6 +455,10 @@ class MainWindow(QMainWindow):
         self.current_selection_type = 0
         self.rubber_band_actor = None
         self.picking_mode = "None"
+
+        self.cell_point_ids = None
+        self.point_cell_ids = None
+        self.mesh_version = 0
 
     def reset(self):
         self.voxel_data = None
@@ -473,8 +476,28 @@ class MainWindow(QMainWindow):
         self.rubber_band_actor = None
         self.picking_mode = "None"
 
+        self.cell_point_ids = None
+        self.point_cell_ids = None
+        self.mesh_version += 1
+
         self.renderer.RemoveAllViewProps()
         self.renderer.RemoveAllLights()
+
+    def compute_mesh_data(self):
+        if self.cell_point_ids is None or self.point_cell_ids is None:
+            print("Computing mesh data...")
+            self.cell_point_ids = [
+                set(self.mesh.GetCell(cell_id).GetPointId(i)
+                    for i in range(self.mesh.GetCell(cell_id).GetNumberOfPoints()))
+                for cell_id in range(self.mesh.GetNumberOfCells())
+            ]
+
+            self.point_cell_ids = {}
+            for cell_id, point_ids in enumerate(self.cell_point_ids):
+                for point_id in point_ids:
+                    if point_id not in self.point_cell_ids:
+                        self.point_cell_ids[point_id] = set()
+                    self.point_cell_ids[point_id].add(cell_id)
 
     def add_points(self, new_points):
         num_new_points = new_points.GetNumberOfPoints()
@@ -637,53 +660,54 @@ class MainWindow(QMainWindow):
         return True
 
     def expand_all_selections(self):
-        total_expanded = 0
+        self.compute_mesh_data()
 
-        # First, collect all currently labeled points
-        #for selection_type in range(16):
-        #    current_selection = self.labeled_points[selection_type]
-        #    for i in range(current_selection.GetNumberOfPoints()):
-        #        point = current_selection.GetPoint(i)
-        #        point = (int(round(point[0])), int(round(point[1])), int(round(point[2])))
-        #        found_point = self.mesh.FindPoint(point)
-        #        self.all_labeled_points.add(found_point)
+        all_labeled_points = set()
+        new_point_ids = {i: set() for i in range(16)}
 
+        # Populate all_labeled_points
         for selection_type in range(16):
             current_selection = self.labeled_points[selection_type]
-
-            if current_selection.GetNumberOfPoints() == 0:
-                continue  # Skip empty selections
-
-            # Create a set to store the IDs of selected points
-            selected_point_ids = set()
             for i in range(current_selection.GetNumberOfPoints()):
                 point = current_selection.GetPoint(i)
                 point_id = self.mesh.FindPoint(point)
-                selected_point_ids.add(point_id)
+                all_labeled_points.add(point_id)
 
-            # Create a set to store the new point IDs
-            new_point_ids = set()
+        # Expand selections (one step)
+        for selection_type in range(16):
+            current_selection = self.labeled_points[selection_type]
+            for i in range(current_selection.GetNumberOfPoints()):
+                point = current_selection.GetPoint(i)
+                point_id = self.mesh.FindPoint(point)
 
-            # Iterate through all cells in the mesh
-            for cell_id in range(self.mesh.GetNumberOfCells()):
-                cell = self.mesh.GetCell(cell_id)
-                cell_point_ids = [cell.GetPointId(i) for i in range(cell.GetNumberOfPoints())]
+                # Find adjacent cells
+                for cell_id in self.point_cell_ids[point_id]:
+                    # Add points from adjacent cells if not already labeled
+                    for adjacent_point_id in self.cell_point_ids[cell_id]:
+                        if adjacent_point_id not in all_labeled_points:
+                            new_point_ids[selection_type].add(adjacent_point_id)
+                            all_labeled_points.add(adjacent_point_id)
 
-                # If any point of the cell is in the current selection, add all points of the cell
-                # that are not already labeled
-                if any(point_id in selected_point_ids for point_id in cell_point_ids):
-                    for point_id in cell_point_ids:
-                        new_point_ids.add(point_id)
+        total_expanded = 0
 
-            # Create a new vtkPoints object for the expanded selection
+        # Update selections with new points
+        for selection_type in range(16):
+            if not new_point_ids[selection_type]:
+                continue  # Skip selections with no new points
+
+            current_selection = self.labeled_points[selection_type]
             expanded_points = vtk.vtkPoints()
-            for point_id in selected_point_ids.union(new_point_ids):
+
+            # Add existing points
+            for i in range(current_selection.GetNumberOfPoints()):
+                expanded_points.InsertNextPoint(current_selection.GetPoint(i))
+
+            # Add new points
+            for point_id in new_point_ids[selection_type]:
                 expanded_points.InsertNextPoint(self.mesh.GetPoint(point_id))
 
-            # Update the selection for the current selection type
             self.labeled_points[selection_type] = expanded_points
-
-            total_expanded += len(new_point_ids)
+            total_expanded += len(new_point_ids[selection_type])
 
         self.update_visualization()
 
