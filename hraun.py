@@ -414,7 +414,7 @@ the_index = {
 
 def get_color_for_selection_type(selection_type):
     # Create a color map with 32 distinct colors
-    cmap = plt.get_cmap('viridis')
+    cmap = plt.get_cmap('inferno')
     base_colors = cmap(np.linspace(0, 1, 16))
 
 
