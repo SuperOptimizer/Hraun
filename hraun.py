@@ -1,5 +1,4 @@
 import sys
-from scipy.spatial import ConvexHull
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QMessageBox, QWidget, QSlider, QSplitter, QLabel, QLineEdit, QPushButton, QCheckBox, QHBoxLayout, QComboBox
 from PyQt6.QtCore import Qt
 from skimage import measure
@@ -17,8 +16,6 @@ import tifffile
 import numpy as np
 from PIL import Image
 from skimage.measure import label
-import random
-import vtkmodules
 
 
 USER = os.environ.get('SCROLLPRIZE_USER')
