@@ -17,6 +17,8 @@ import tifffile
 import numpy as np
 from PIL import Image
 from skimage.measure import label
+import random
+import vtkmodules
 
 
 USER = os.environ.get('SCROLLPRIZE_USER')
@@ -45,25 +47,13 @@ the_index = {
 
 
 def get_color_for_selection_type(selection_type):
-    colors = [
-        (1, 0, 0),  # Red
-        (0, 1, 0),  # Green
-        (0, 0, 1),  # Blue
-        (1, 1, 0),  # Yellow
-        (1, 0, 1),  # Magenta
-        (0, 1, 1),  # Cyan
-        (1, 0.5, 0),  # Orange
-        (0.5, 0, 1),  # Purple
-        (0, 0.5, 0),  # Dark Green
-        (0.5, 0.5, 0),  # Olive
-        (0.5, 0, 0.5),  # Plum
-        (0, 0.5, 0.5),  # Teal
-        (1, 0.5, 0.5),  # Pink
-        (0.5, 1, 0.5),  # Light Green
-        (0.5, 0.5, 1),  # Light Blue
-        (0.7, 0.7, 0.7),  # Light Gray
-    ]
-    return colors[selection_type]
+    # Create a color map with 32 distinct colors
+    cmap = plt.get_cmap('viridis')
+    base_colors = cmap(np.linspace(0, 1, 16))
+
+
+    all_colors = list(base_colors)
+    return all_colors[selection_type][:3]  # Return only RGB values
 
 def rescale_array(arr):
     min_val = arr.min()
@@ -389,7 +379,7 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(self.load_button)
 
         self.color_source_checkbox = QCheckBox("Use Zarr for Coloring")
-        self.color_source_checkbox.setChecked(True)
+        self.color_source_checkbox.setChecked(False)
         self.control_layout.addWidget(self.color_source_checkbox)
 
         self.update_timestamp_combo(self.volume_combo.currentText())
@@ -423,11 +413,28 @@ class MainWindow(QMainWindow):
         self.expand_all_selections_button.clicked.connect(self.expand_all_selections)
         self.control_layout.addWidget(self.expand_all_selections_button)
 
-        self.selection_type_selector = QComboBox()
-        self.selection_type_selector.addItems([f"Selection {i}" for i in range(16)])
-        self.selection_type_selector.currentIndexChanged.connect(self.set_current_selection_type)
+        self.control_layout.addWidget(QLabel("Expansion Steps:"))
+        self.expansion_steps_slider = QSlider(Qt.Orientation.Horizontal)
+        self.expansion_steps_slider.setRange(1, 64)
+        self.expansion_steps_slider.setValue(1)
+        self.expansion_steps_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.expansion_steps_slider.setTickInterval(1)
+        self.expansion_steps_slider.valueChanged.connect(self.update_expansion_steps_label)
+        self.control_layout.addWidget(self.expansion_steps_slider)
+        self.expansion_steps_label = QLabel("1")
+        self.control_layout.addWidget(self.expansion_steps_label)
+
+        # Replace combo box with slider for selection type
         self.control_layout.addWidget(QLabel("Selection Type:"))
-        self.control_layout.addWidget(self.selection_type_selector)
+        self.selection_type_slider = QSlider(Qt.Orientation.Horizontal)
+        self.selection_type_slider.setRange(0, 16)
+        self.selection_type_slider.setValue(0)
+        self.selection_type_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.selection_type_slider.setTickInterval(1)
+        self.selection_type_slider.valueChanged.connect(self.set_current_selection_type)
+        self.control_layout.addWidget(self.selection_type_slider)
+        self.selection_type_label = QLabel("0")
+        self.control_layout.addWidget(self.selection_type_label)
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFocus()
@@ -456,9 +463,12 @@ class MainWindow(QMainWindow):
         self.rubber_band_actor = None
         self.picking_mode = "None"
 
-        self.cell_point_ids = None
-        self.point_cell_ids = None
+        self.processed_points = set()
+        self.processed_cells = set()
+        self.frontier = set()
+
         self.mesh_version = 0
+
 
     def reset(self):
         self.voxel_data = None
@@ -476,28 +486,20 @@ class MainWindow(QMainWindow):
         self.rubber_band_actor = None
         self.picking_mode = "None"
 
-        self.cell_point_ids = None
-        self.point_cell_ids = None
+        self.processed_points = set()
+        self.processed_cells = set()
+        self.frontier = set()
         self.mesh_version += 1
 
         self.renderer.RemoveAllViewProps()
         self.renderer.RemoveAllLights()
 
-    def compute_mesh_data(self):
-        if self.cell_point_ids is None or self.point_cell_ids is None:
-            print("Computing mesh data...")
-            self.cell_point_ids = [
-                set(self.mesh.GetCell(cell_id).GetPointId(i)
-                    for i in range(self.mesh.GetCell(cell_id).GetNumberOfPoints()))
-                for cell_id in range(self.mesh.GetNumberOfCells())
-            ]
+    def update_expansion_steps_label(self, value):
+        self.expansion_steps_label.setText(str(value))
 
-            self.point_cell_ids = {}
-            for cell_id, point_ids in enumerate(self.cell_point_ids):
-                for point_id in point_ids:
-                    if point_id not in self.point_cell_ids:
-                        self.point_cell_ids[point_id] = set()
-                    self.point_cell_ids[point_id].add(cell_id)
+    def set_current_selection_type(self, value):
+        self.current_selection_type = value
+        self.selection_type_label.setText(str(value))
 
     def add_points(self, new_points):
         num_new_points = new_points.GetNumberOfPoints()
@@ -545,60 +547,21 @@ class MainWindow(QMainWindow):
     def get_current_selection_type(self):
         return self.current_selection_type
 
-    def set_current_selection_type(self, selection_type):
-        self.current_selection_type = selection_type
 
     def add_coordinate_system(self, mesh_bounds):
-
         # Create bounding box with scales
         cube_axes = vtk.vtkCubeAxesActor()
         cube_axes.SetBounds(mesh_bounds)
         cube_axes.SetCamera(self.renderer.GetActiveCamera())
-        cube_axes.SetXTitle("X")
+        cube_axes.SetXTitle("Z")
         cube_axes.SetYTitle("Y")
-        cube_axes.SetZTitle("Z")
+        cube_axes.SetZTitle("X")
         cube_axes.SetFlyMode(vtk.vtkCubeAxesActor.VTK_FLY_OUTER_EDGES)
         cube_axes.SetGridLineLocation(vtk.vtkCubeAxesActor.VTK_GRID_LINES_FURTHEST)
         cube_axes.XAxisMinorTickVisibilityOff()
         cube_axes.YAxisMinorTickVisibilityOff()
         cube_axes.ZAxisMinorTickVisibilityOff()
         self.renderer.AddActor(cube_axes)
-
-        # Create checkered grid
-        plane = vtk.vtkPlaneSource()
-        plane.SetOrigin(mesh_bounds[0], mesh_bounds[2], mesh_bounds[4])
-        plane.SetPoint1(mesh_bounds[1], mesh_bounds[2], mesh_bounds[4])
-        plane.SetPoint2(mesh_bounds[0], mesh_bounds[3], mesh_bounds[4])
-        plane.SetResolution(10, 10)
-
-        # Create a custom checkered texture
-        texture_size = 64
-        texture = vtk.vtkImageData()
-        texture.SetDimensions(texture_size, texture_size, 1)
-        texture.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 3)
-
-        for i in range(texture_size):
-            for j in range(texture_size):
-                if (i // (texture_size // 8) + j // (texture_size // 8)) % 2 == 0:
-                    texture.SetScalarComponentFromFloat(i, j, 0, 0, 200)
-                    texture.SetScalarComponentFromFloat(i, j, 0, 1, 200)
-                    texture.SetScalarComponentFromFloat(i, j, 0, 2, 200)
-                else:
-                    texture.SetScalarComponentFromFloat(i, j, 0, 0, 100)
-                    texture.SetScalarComponentFromFloat(i, j, 0, 1, 100)
-                    texture.SetScalarComponentFromFloat(i, j, 0, 2, 100)
-
-        texture_object = vtk.vtkTexture()
-        texture_object.SetInputData(texture)
-        texture_object.InterpolateOn()
-
-        mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInputConnection(plane.GetOutputPort())
-
-        actor = vtk.vtkActor()
-        actor.SetMapper(mapper)
-        actor.SetTexture(texture_object)
-        self.renderer.AddActor(actor)
 
         # Adjust camera and add light
         self.renderer.GetActiveCamera().Elevation(20)
@@ -659,59 +622,84 @@ class MainWindow(QMainWindow):
 
         return True
 
+    def get_triangle_strip_neighbors(self, point_id):
+        neighbors = set()
+
+        # Get all cells (triangle strips) that use this point
+        cell_ids = vtk.vtkIdList()
+        self.mesh.GetPointCells(point_id, cell_ids)
+
+        for i in range(cell_ids.GetNumberOfIds()):
+            cell_id = cell_ids.GetId(i)
+            strip = self.mesh.GetCell(cell_id)
+
+            # Get the point ids of the strip
+            strip_points = strip.GetPointIds()
+            n_points = strip_points.GetNumberOfIds()
+
+            # Find the position(s) of our point in the strip
+            for j in range(n_points):
+                if strip_points.GetId(j) == point_id:
+                    # Add the previous point in the strip (if it exists)
+                    if j > 0:
+                        neighbors.add(strip_points.GetId(j - 1))
+
+                    # Add the next point in the strip (if it exists)
+                    if j < n_points - 1:
+                        neighbors.add(strip_points.GetId(j + 1))
+
+        return list(neighbors)
+
     def expand_all_selections(self):
-        self.compute_mesh_data()
+        steps=self.expansion_steps_slider.value()
+        for step in range(steps):
+            if len(self.frontier) == 0:
+                frontier_was_empty = True
 
-        all_labeled_points = set()
-        new_point_ids = {i: set() for i in range(16)}
+                #calculate the frontier from looking through all selection points
 
-        # Populate all_labeled_points
-        for selection_type in range(16):
-            current_selection = self.labeled_points[selection_type]
-            for i in range(current_selection.GetNumberOfPoints()):
-                point = current_selection.GetPoint(i)
-                point_id = self.mesh.FindPoint(point)
-                all_labeled_points.add(point_id)
+                for selection_type in range(16):
+                    current_selection = self.labeled_points[selection_type]
+                    for i in range(current_selection.GetNumberOfPoints()):
+                        point = current_selection.GetPoint(i)
+                        point_id = self.mesh.FindPoint(point)
+                        neighbors = self.get_triangle_strip_neighbors(point_id)
+                        for n in neighbors:
+                            if n in self.processed_points:
+                                continue
+                            self.frontier.add((n, selection_type))
 
-        # Expand selections (one step)
-        for selection_type in range(16):
-            current_selection = self.labeled_points[selection_type]
-            for i in range(current_selection.GetNumberOfPoints()):
-                point = current_selection.GetPoint(i)
-                point_id = self.mesh.FindPoint(point)
+                if len(self.frontier) == 0:
+                    print("could not find any points for expansion")
+                    #we didn't add any points, which means we probably have already processed all the points
+                    return
+            else:
+                frontier_was_empty = False
+            num_added = 0
+            next_frontier = set()
+            frontier_points = set(f[0] for f in self.frontier)
+            for point_id, selection_type in self.frontier:
+                #this assertion is false when two different regions are attempting to grow
+                #to the same point
+                #assert point_id not in self.processed_points
 
-                # Find adjacent cells
-                for cell_id in self.point_cell_ids[point_id]:
-                    # Add points from adjacent cells if not already labeled
-                    for adjacent_point_id in self.cell_point_ids[cell_id]:
-                        if adjacent_point_id not in all_labeled_points:
-                            new_point_ids[selection_type].add(adjacent_point_id)
-                            all_labeled_points.add(adjacent_point_id)
+                neighbors = self.get_triangle_strip_neighbors(point_id)
+                for n in neighbors:
+                    if n not in self.processed_points and n not in frontier_points:
+                        next_frontier.add((n,selection_type))
+                point = self.mesh.GetPoint(point_id)
+                self.labeled_points[selection_type].InsertNextPoint(point)
+                self.processed_points.add(point_id)
+                num_added += 1
+                # print('qwer')
+            self.frontier = next_frontier
+            print(f"added {num_added} points to different selections")
 
-        total_expanded = 0
+            self.update_visualization()
+            QApplication.processEvents()
 
-        # Update selections with new points
-        for selection_type in range(16):
-            if not new_point_ids[selection_type]:
-                continue  # Skip selections with no new points
+            self.update_visualization()
 
-            current_selection = self.labeled_points[selection_type]
-            expanded_points = vtk.vtkPoints()
-
-            # Add existing points
-            for i in range(current_selection.GetNumberOfPoints()):
-                expanded_points.InsertNextPoint(current_selection.GetPoint(i))
-
-            # Add new points
-            for point_id in new_point_ids[selection_type]:
-                expanded_points.InsertNextPoint(self.mesh.GetPoint(point_id))
-
-            self.labeled_points[selection_type] = expanded_points
-            total_expanded += len(new_point_ids[selection_type])
-
-        self.update_visualization()
-
-        print(f"All selections expanded. Total new points added: {total_expanded}")
 
     def expand_selection_to_connected(self):
         pass
@@ -741,19 +729,16 @@ class MainWindow(QMainWindow):
         isolevel = self.isolevel_slider.value()
         downscale = self.downscale_slider.value()
         print(f"Using isolevel: {isolevel}, Downscaling factor: {downscale}")
-        mask = self.voxel_data > 0
-        self.voxel_data[self.voxel_data < isolevel] = 0
+        self.voxel_data = np.where(self.voxel_data < isolevel, 0, self.voxel_data)
 
-        labels = label(self.voxel_data > isolevel)
-        component_sizes = np.bincount(labels.flatten())
+        labels = label(self.voxel_data > isolevel, connectivity=1, return_num=False)
+        component_sizes = np.bincount(labels.ravel())
         mask = np.isin(labels, np.where(component_sizes >= 32)[0])
-        self.voxel_data = self.voxel_data * mask
-
-        self.label_data = np.where(self.voxel_data < isolevel, 0, 255).astype(np.uint8)
+        self.voxel_data *= mask
 
         try:
             verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel,
-                                                                   step_size=downscale, mask=mask)
+                                                                   step_size=downscale, mask=mask, allow_degenerate=False)
         except ValueError:
             QMessageBox.warning(self, "Invalid marching cubes data", "The given chunk did not yield any triangles")
             return
@@ -765,22 +750,32 @@ class MainWindow(QMainWindow):
         verts[:, 2] *= scaling_factors[0]  # z
 
         points = vtk.vtkPoints()
-        points.SetData(numpy_support.numpy_to_vtk(verts, deep=True))
+        points.SetData(numpy_support.numpy_to_vtk(verts, deep=False))
 
         cells = vtk.vtkCellArray()
         cells.SetCells(len(faces), numpy_support.numpy_to_vtkIdTypeArray(
             np.hstack((np.ones(len(faces), dtype=np.int64)[:, np.newaxis] * 3,
                        faces)).ravel(),
-            deep=True
+            deep=False
         ))
 
         poly_data = vtk.vtkPolyData()
         poly_data.SetPoints(points)
         poly_data.SetPolys(cells)
 
+        # Add normals to the polydata
+        vtk_normals = numpy_support.numpy_to_vtk(normals, deep=False)
+        vtk_normals.SetName("Normals")
+        poly_data.GetPointData().SetNormals(vtk_normals)
+
+        cleaner = vtk.vtkCleanPolyData()
+        cleaner.SetInputData(poly_data)
+        cleaner.Update()
+
         strip_per = vtk.vtkStripper()
         strip_per.SetInputData(poly_data)
         strip_per.Update()
+
         self.mesh = strip_per.GetOutput()
 
         print("VTK mesh created and triangle strips generated")
@@ -841,7 +836,7 @@ class MainWindow(QMainWindow):
         actor.SetMapper(mapper)
 
         # Configure actor properties for lighting and shadows
-        actor.GetProperty().SetAmbient(0.3)
+        actor.GetProperty().SetAmbient(0.5)
         actor.GetProperty().SetDiffuse(0.7)
         actor.GetProperty().SetSpecular(0.2)
         actor.GetProperty().SetSpecularPower(10)
