@@ -415,7 +415,7 @@ class MainWindow(QMainWindow):
 
         self.control_layout.addWidget(QLabel("Expansion Steps:"))
         self.expansion_steps_slider = QSlider(Qt.Orientation.Horizontal)
-        self.expansion_steps_slider.setRange(1, 64)
+        self.expansion_steps_slider.setRange(1, 512)
         self.expansion_steps_slider.setValue(1)
         self.expansion_steps_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.expansion_steps_slider.setTickInterval(1)
@@ -650,39 +650,75 @@ class MainWindow(QMainWindow):
 
         return list(neighbors)
 
+
+    def expand_selection_to_connected(self, selection_type=None):
+        print()
+        if not selection_type:
+            #when called via the gui, selection_type is False. not none, not an it, False. ???
+            selection_type = self.selection_type_slider.value()
+
+        # calculate the frontier from looking through all selection points
+        current_selection = self.labeled_points[selection_type]
+        for i in range(current_selection.GetNumberOfPoints()):
+            point = current_selection.GetPoint(i)
+            point_id = self.mesh.FindPoint(point)
+            neighbors = self.get_triangle_strip_neighbors(point_id)
+            for n in neighbors:
+                if n in self.processed_points:
+                    continue
+                self.frontier.add((n, selection_type))
+
+        if len(self.frontier) == 0:
+            print("could not find any points for expansion")
+            # we didn't add any points, which means we probably have already processed all the points
+            return
+
+        num_added = 0
+        next_frontier = set()
+        frontier_points = set(f[0] for f in self.frontier)
+        for point_id, selection_type_ in self.frontier:
+            if selection_type_ != selection_type:
+                next_frontier.add((point_id, selection_type_))
+                #we aren't processing the given selection type for this point id so skip
+                continue
+
+            neighbors = self.get_triangle_strip_neighbors(point_id)
+            for n in neighbors:
+                if n not in self.processed_points and n not in frontier_points:
+                    next_frontier.add((n, selection_type))
+            point = self.mesh.GetPoint(point_id)
+            self.labeled_points[selection_type].InsertNextPoint(point)
+            self.processed_points.add(point_id)
+            num_added += 1
+        self.frontier = next_frontier
+        print(f"added {num_added} point for selection label {selection_type}")
+        self.update_visualization()
+        QApplication.processEvents()
+
     def expand_all_selections(self):
         steps=self.expansion_steps_slider.value()
+
+        for selection_type in range(16):
+            current_selection = self.labeled_points[selection_type]
+            for i in range(current_selection.GetNumberOfPoints()):
+                point = current_selection.GetPoint(i)
+                point_id = self.mesh.FindPoint(point)
+                neighbors = self.get_triangle_strip_neighbors(point_id)
+                for n in neighbors:
+                    if n in self.processed_points:
+                        continue
+                    self.frontier.add((n, selection_type))
+
+        if len(self.frontier) == 0:
+            print("could not find any points for expansion")
+            # we didn't add any points, which means we probably have already processed all the points
+            return
+
         for step in range(steps):
-            if len(self.frontier) == 0:
-                frontier_was_empty = True
-
-                #calculate the frontier from looking through all selection points
-
-                for selection_type in range(16):
-                    current_selection = self.labeled_points[selection_type]
-                    for i in range(current_selection.GetNumberOfPoints()):
-                        point = current_selection.GetPoint(i)
-                        point_id = self.mesh.FindPoint(point)
-                        neighbors = self.get_triangle_strip_neighbors(point_id)
-                        for n in neighbors:
-                            if n in self.processed_points:
-                                continue
-                            self.frontier.add((n, selection_type))
-
-                if len(self.frontier) == 0:
-                    print("could not find any points for expansion")
-                    #we didn't add any points, which means we probably have already processed all the points
-                    return
-            else:
-                frontier_was_empty = False
             num_added = 0
             next_frontier = set()
             frontier_points = set(f[0] for f in self.frontier)
             for point_id, selection_type in self.frontier:
-                #this assertion is false when two different regions are attempting to grow
-                #to the same point
-                #assert point_id not in self.processed_points
-
                 neighbors = self.get_triangle_strip_neighbors(point_id)
                 for n in neighbors:
                     if n not in self.processed_points and n not in frontier_points:
@@ -697,12 +733,6 @@ class MainWindow(QMainWindow):
 
             self.update_visualization()
             QApplication.processEvents()
-
-            self.update_visualization()
-
-
-    def expand_selection_to_connected(self):
-        pass
 
     def load_voxel_data(self, voxel_data=None):
         if not self.validate_dimensions():
@@ -722,27 +752,34 @@ class MainWindow(QMainWindow):
         print(f"Scaling factors: {scaling_factors}")
 
         if voxel_data is False:
+            print("getting voxel data")
             self.voxel_data = self.volman.chunk(volume_id, timestamp, offset_dims, chunk_dims)
+            print("got voxel data")
         else:
             self.voxel_data = voxel_data
 
         isolevel = self.isolevel_slider.value()
         downscale = self.downscale_slider.value()
         print(f"Using isolevel: {isolevel}, Downscaling factor: {downscale}")
+        print("masking below iso data")
         self.voxel_data = np.where(self.voxel_data < isolevel, 0, self.voxel_data)
-
+        print("done masking below iso data")
+        print("removing small connected noise")
         labels = label(self.voxel_data > isolevel, connectivity=1, return_num=False)
         component_sizes = np.bincount(labels.ravel())
         mask = np.isin(labels, np.where(component_sizes >= 32)[0])
         self.voxel_data *= mask
+        print("done removing small connected noise")
 
         try:
+            print("marching cubes")
             verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel,
                                                                    step_size=downscale, mask=mask, allow_degenerate=False)
+            print("done marching cubes")
         except ValueError:
             QMessageBox.warning(self, "Invalid marching cubes data", "The given chunk did not yield any triangles")
             return
-        print("Marching cubes completed successfully.")
+        print("creating vtk mesh")
 
         # Apply scaling factors to vertices
         verts[:, 0] *= scaling_factors[2]  # x
@@ -836,7 +873,7 @@ class MainWindow(QMainWindow):
         actor.SetMapper(mapper)
 
         # Configure actor properties for lighting and shadows
-        actor.GetProperty().SetAmbient(0.5)
+        actor.GetProperty().SetAmbient(0.7)
         actor.GetProperty().SetDiffuse(0.7)
         actor.GetProperty().SetSpecular(0.2)
         actor.GetProperty().SetSpecularPower(10)
