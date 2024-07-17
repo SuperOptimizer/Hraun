@@ -23,7 +23,7 @@ import vtkmodules
 
 USER = os.environ.get('SCROLLPRIZE_USER')
 PASS = os.environ.get('SCROLLPRIZE_PASS')
-
+VOLMAN_PATH = 'D:/vesuvius.volman'
 
 the_index = {
     'Scroll1': {
@@ -821,7 +821,7 @@ class MainWindow(QMainWindow):
         self.picking_style = PickingInteractorStyle(self)
         self.interactor.SetInteractorStyle(self.camera_style)
 
-        self.volman = VolMan('D:/vesuvius.volman')
+        self.volman = VolMan(VOLMAN_PATH)
 
         self.voxel_data = None
         self.mesh = None
