@@ -1021,11 +1021,23 @@ class MainWindow(QMainWindow):
 
         for i in range(cell_ids.GetNumberOfIds()):
             cell_id = cell_ids.GetId(i)
+            if cell_id in self.processed_cells:
+                continue
             strip = self.mesh.GetCell(cell_id)
 
             # Get the point ids of the strip
             strip_points = strip.GetPointIds()
             n_points = strip_points.GetNumberOfIds()
+            been_processed = 0
+            for j in range(n_points):
+                curid = strip_points.GetId(j)
+                if curid in self.processed_points:
+                    been_processed += 1
+
+            if been_processed == n_points:
+                self.processed_cells.add(cell_id)
+
+
 
             # Find the position(s) of our point in the strip
             for j in range(n_points):
