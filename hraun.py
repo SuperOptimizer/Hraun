@@ -1,5 +1,5 @@
 import sys
-
+from scipy.spatial import Delaunay
 import skimage.exposure
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QMessageBox, QWidget, QSlider, QSplitter, QLabel, QLineEdit, QPushButton, QCheckBox, QHBoxLayout, QComboBox
 from PyQt6.QtCore import Qt
@@ -457,7 +457,7 @@ class VolMan:
             for source, timestamps in sources.items():
                 for timestamp in timestamps.keys():
                     os.makedirs(f'{cachedir}/{volume}/{source}/{timestamp}', exist_ok=True)
-                    print(f"Created directory: {cachedir}/{volume}/{source}/{timestamp}")
+                    #print(f"Created directory: {cachedir}/{volume}/{source}/{timestamp}")
 
     def load_cropped_tiff_slices(self, scroll, source, idnum, start_slice, end_slice, crop_start, crop_end, padlen):
         slices_data = []
@@ -1064,8 +1064,6 @@ class MainWindow(QMainWindow):
             if been_processed == n_points:
                 self.processed_cells.add(cell_id)
 
-
-
             # Find the position(s) of our point in the strip
             for j in range(n_points):
                 if strip_points.GetId(j) == point_id:
@@ -1177,39 +1175,38 @@ class MainWindow(QMainWindow):
         chunk_dims = [int(self.chunk_z.text()), int(self.chunk_y.text()), int(self.chunk_x.text())]
         scaling_factors = [float(self.scale_z.text()), float(self.scale_y.text()), float(self.scale_x.text())]
 
+        mask_isolevel = self.mask_isolevel_slider.value()
+        mc_isolevel = self.mc_isolevel_slider.value()
+        downscale = self.downscale_slider.value()
+
+
         print(f"Loading data for {volume_id}, source {source}, timestamp {timestamp}")
         print(f"Offsets: {offset_dims}")
         print(f"Chunk size: {chunk_dims}")
         print(f"Scaling factors: {scaling_factors}")
+        print(
+            f"Using mask isolevel: {mask_isolevel}, marching cubes isolevel: {mc_isolevel}, Downscaling factor: {downscale}")
 
         if voxel_data is False:
             print("getting voxel data")
             self.voxel_data = self.volman.chunk(volume_id, source, timestamp, offset_dims, chunk_dims)
             print("got voxel data")
+            print("masking below iso data")
+            self.voxel_data = np.where(self.voxel_data < mask_isolevel, 0, self.voxel_data)
+            print("done masking below iso data")
+            print("removing small connected noise")
+            labels = label(self.voxel_data > mask_isolevel, connectivity=1, return_num=False)
+            component_sizes = np.bincount(labels.ravel())
+            mask = np.isin(labels, np.where(component_sizes >= 32)[0])
+            self.voxel_data *= mask
+            print("done removing small connected noise")
+            print("preprocessing volume")
+            self.voxel_data = (skimage.restoration.denoise_tv_chambolle(self.voxel_data) * 255).astype(np.uint8)
+            # self.voxel_data = (skimage.exposure.equalize_adapthist(self.voxel_data) * 255).astype(np.uint8)
+            self.voxel_data = preprocessing.global_local_contrast_3d(self.voxel_data)
+            print("done preprocessing volume")
         else:
             self.voxel_data = voxel_data
-
-        mask_isolevel = self.mask_isolevel_slider.value()
-        mc_isolevel = self.mc_isolevel_slider.value()
-        downscale = self.downscale_slider.value()
-        print(
-            f"Using mask isolevel: {mask_isolevel}, marching cubes isolevel: {mc_isolevel}, Downscaling factor: {downscale}")
-
-        print("masking below iso data")
-        self.voxel_data = np.where(self.voxel_data < mask_isolevel, 0, self.voxel_data)
-        print("done masking below iso data")
-        print("removing small connected noise")
-        labels = label(self.voxel_data > mask_isolevel, connectivity=1, return_num=False)
-        component_sizes = np.bincount(labels.ravel())
-        mask = np.isin(labels, np.where(component_sizes >= 32)[0])
-        self.voxel_data *= mask
-        print("done removing small connected noise")
-        print("preprocessing volume")
-        self.voxel_data = (skimage.restoration.denoise_tv_chambolle(self.voxel_data) * 255).astype(np.uint8)
-        #self.voxel_data = (skimage.exposure.equalize_adapthist(self.voxel_data) * 255).astype(np.uint8)
-        self.voxel_data = preprocessing.global_local_contrast_3d(self.voxel_data)
-        #self.voxel_data[~papyrus_mask] = 0
-        print("done preprocessing volume")
 
         try:
             print("marching cubes")
@@ -1360,7 +1357,9 @@ class MainWindow(QMainWindow):
         world_x = bounds[0] + (x / (self.voxel_data.shape[2] - 1)) * (bounds[1] - bounds[0]) / scaling_factors[2]
         world_y = bounds[2] + (y / (self.voxel_data.shape[1] - 1)) * (bounds[3] - bounds[2]) / scaling_factors[1]
         world_z = bounds[4] + (z / (self.voxel_data.shape[0] - 1)) * (bounds[5] - bounds[4]) / scaling_factors[0]
-        return (world_x, world_y, world_z)
+        return (world_z, world_y, world_x)
+
+
 
     def convert_to_voxel_space(self, world_coord):
         z, y, x = world_coord
@@ -1370,6 +1369,8 @@ class MainWindow(QMainWindow):
         voxel_y = int(round((y - bounds[2]) / (bounds[3] - bounds[2]) * (self.voxel_data.shape[1] - 1) * scaling_factors[1]))
         voxel_z = int(round((z - bounds[4]) / (bounds[5] - bounds[4]) * (self.voxel_data.shape[0] - 1) * scaling_factors[0]))
         return (voxel_z, voxel_y, voxel_x)
+
+
 
     def draw_rubber_band(self, start_position, end_position):
         if not start_position or not end_position or not self.renderer:
@@ -1477,7 +1478,55 @@ class MainWindow(QMainWindow):
         pass
 
     def delete_selected_points(self):
-        pass
+        if not hasattr(self, 'mesh') or not hasattr(self, 'voxel_data'):
+            print("Mesh or voxel data not initialized")
+            return
+
+        selection_type = self.selection_type_slider.value()
+        current_selection = self.labeled_points[selection_type]
+
+        # Convert selected points to numpy array
+        points = np.array([current_selection.GetPoint(i) for i in range(current_selection.GetNumberOfPoints())])
+
+        if len(points) < 4:
+            print("Not enough points to form a 3D polygon")
+            return
+
+        # Create a Delaunay triangulation of the points
+        tri = Delaunay(points)
+
+        # Create a grid of all voxel coordinates
+        z, y, x = np.meshgrid(np.arange(self.voxel_data.shape[0]),
+                              np.arange(self.voxel_data.shape[1]),
+                              np.arange(self.voxel_data.shape[2]),
+                              indexing='ij')
+        voxel_coords = np.column_stack((z.ravel(), y.ravel(), x.ravel()))
+
+        # Convert voxel coordinates to world coordinates
+        world_coords = np.array([self.convert_to_world_space(coord) for coord in voxel_coords])
+
+        # Find which points are inside the triangulation
+        inside_mask = tri.find_simplex(world_coords) >= 0
+
+        # Reshape the mask to match voxel_data shape
+        inside_mask = inside_mask.reshape(self.voxel_data.shape)
+
+        # Apply the mask to the voxel data
+        self.voxel_data[inside_mask] = 0
+
+        # Re-render the mesh
+        self.load_voxel_data(self.voxel_data)
+
+        # Clear the current selection
+        self.clear_current_selection()
+
+    def clear_current_selection(self):
+        selection_type = self.selection_type_slider.value()
+        self.labeled_points[selection_type].Reset()
+        if self.selected_vertex_actors[selection_type]:
+            self.renderer.RemoveActor(self.selected_vertex_actors[selection_type])
+            self.selected_vertex_actors[selection_type] = None
+        self.vtk_widget.GetRenderWindow().Render()
 
 
 if __name__ == "__main__":
