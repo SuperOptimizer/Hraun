@@ -1,4 +1,6 @@
 import sys
+
+import skimage.exposure
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QMessageBox, QWidget, QSlider, QSplitter, QLabel, QLineEdit, QPushButton, QCheckBox, QHBoxLayout, QComboBox
 from PyQt6.QtCore import Qt
 from skimage import measure
@@ -16,7 +18,8 @@ import tifffile
 import numpy as np
 from PIL import Image
 from skimage.measure import label
-
+import snic
+import preprocessing
 
 USER = os.environ.get('SCROLLPRIZE_USER')
 PASS = os.environ.get('SCROLLPRIZE_PASS')
@@ -712,17 +715,29 @@ class MainWindow(QMainWindow):
             chunk_layout.addWidget(chunk)
         self.control_layout.addLayout(chunk_layout)
 
-        # Isolevel slider and value display
-        iso_layout = QHBoxLayout()
-        iso_layout.addWidget(QLabel("Isolevel:"))
-        self.isolevel_slider = QSlider(Qt.Orientation.Horizontal)
-        self.isolevel_slider.setRange(0, 255)
-        self.isolevel_slider.setValue(100)
-        self.isolevel_slider.valueChanged.connect(self.update_isolevel_label)
-        iso_layout.addWidget(self.isolevel_slider)
-        self.isolevel_label = QLabel("100")
-        iso_layout.addWidget(self.isolevel_label)
-        self.control_layout.addLayout(iso_layout)
+        # Mask Isolevel slider and value display
+        mask_iso_layout = QHBoxLayout()
+        mask_iso_layout.addWidget(QLabel("Mask Isolevel:"))
+        self.mask_isolevel_slider = QSlider(Qt.Orientation.Horizontal)
+        self.mask_isolevel_slider.setRange(0, 255)
+        self.mask_isolevel_slider.setValue(50)  # You can adjust this default value
+        self.mask_isolevel_slider.valueChanged.connect(self.update_mask_isolevel_label)
+        mask_iso_layout.addWidget(self.mask_isolevel_slider)
+        self.mask_isolevel_label = QLabel("50")  # Matches the default value
+        mask_iso_layout.addWidget(self.mask_isolevel_label)
+        self.control_layout.addLayout(mask_iso_layout)
+
+        # Marching Cubes Isolevel slider and value display
+        mc_iso_layout = QHBoxLayout()
+        mc_iso_layout.addWidget(QLabel("Marching Cubes Isolevel:"))
+        self.mc_isolevel_slider = QSlider(Qt.Orientation.Horizontal)
+        self.mc_isolevel_slider.setRange(0, 255)
+        self.mc_isolevel_slider.setValue(100)  # Keep the original default value
+        self.mc_isolevel_slider.valueChanged.connect(self.update_mc_isolevel_label)
+        mc_iso_layout.addWidget(self.mc_isolevel_slider)
+        self.mc_isolevel_label = QLabel("100")
+        mc_iso_layout.addWidget(self.mc_isolevel_label)
+        self.control_layout.addLayout(mc_iso_layout)
 
         # Downscaling factor slider and value display
         downscale_layout = QHBoxLayout()
@@ -837,8 +852,11 @@ class MainWindow(QMainWindow):
         self.processed_points = set()
         self.processed_cells = set()
         self.frontier = set()
-
         self.mesh_version = 0
+
+        self.snic_labels = None
+        self.superpixels = None
+
 
 
     def reset(self):
@@ -862,6 +880,9 @@ class MainWindow(QMainWindow):
         self.frontier = set()
         self.mesh_version += 1
 
+        self.snic_labels = None
+        self.superpixels = None
+
         self.renderer.RemoveAllViewProps()
         self.renderer.RemoveAllLights()
 
@@ -870,6 +891,12 @@ class MainWindow(QMainWindow):
         if volume_id in the_index:
             self.source_combo.addItems(the_index[volume_id].keys())
         self.update_timestamp_combo()
+
+    def update_mask_isolevel_label(self, value):
+        self.mask_isolevel_label.setText(str(value))
+
+    def update_mc_isolevel_label(self, value):
+        self.mc_isolevel_label.setText(str(value))
 
     def update_timestamp_combo(self, source=None):
         self.timestamp_combo.clear()
@@ -1135,6 +1162,7 @@ class MainWindow(QMainWindow):
 
             self.update_visualization()
             QApplication.processEvents()
+        print("done expanding all sections ")
 
     def load_voxel_data(self, voxel_data=None):
         if not self.validate_dimensions():
@@ -1161,27 +1189,40 @@ class MainWindow(QMainWindow):
         else:
             self.voxel_data = voxel_data
 
-        isolevel = self.isolevel_slider.value()
+        mask_isolevel = self.mask_isolevel_slider.value()
+        mc_isolevel = self.mc_isolevel_slider.value()
         downscale = self.downscale_slider.value()
-        print(f"Using isolevel: {isolevel}, Downscaling factor: {downscale}")
+        print(
+            f"Using mask isolevel: {mask_isolevel}, marching cubes isolevel: {mc_isolevel}, Downscaling factor: {downscale}")
+
         print("masking below iso data")
-        self.voxel_data = np.where(self.voxel_data < isolevel, 0, self.voxel_data)
+        self.voxel_data = np.where(self.voxel_data < mask_isolevel, 0, self.voxel_data)
         print("done masking below iso data")
         print("removing small connected noise")
-        labels = label(self.voxel_data > isolevel, connectivity=1, return_num=False)
+        labels = label(self.voxel_data > mask_isolevel, connectivity=1, return_num=False)
         component_sizes = np.bincount(labels.ravel())
         mask = np.isin(labels, np.where(component_sizes >= 32)[0])
         self.voxel_data *= mask
         print("done removing small connected noise")
+        print("preprocessing volume")
+        self.voxel_data = (skimage.restoration.denoise_tv_chambolle(self.voxel_data) * 255).astype(np.uint8)
+        #self.voxel_data = (skimage.exposure.equalize_adapthist(self.voxel_data) * 255).astype(np.uint8)
+        self.voxel_data = preprocessing.global_local_contrast_3d(self.voxel_data)
+        #self.voxel_data[~papyrus_mask] = 0
+        print("done preprocessing volume")
 
         try:
             print("marching cubes")
-            verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=isolevel,
-                                                                   step_size=downscale, mask=mask, allow_degenerate=False)
+            verts, faces, normals, values = measure.marching_cubes(self.voxel_data, level=mc_isolevel,
+                                                                   step_size=downscale,  allow_degenerate=False)
             print("done marching cubes")
         except ValueError:
             QMessageBox.warning(self, "Invalid marching cubes data", "The given chunk did not yield any triangles")
             return
+
+        print("superpixeling")
+        #neigh_overflow, self.snic_labels, self.superpixels = snic.snic(self.voxel_data, 8, 1, 150, 200)
+        print("done superpixeling")
         print("creating vtk mesh")
 
         # Apply scaling factors to vertices
