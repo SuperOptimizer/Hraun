@@ -70,7 +70,7 @@ def snic(img, d_seed, compactness, lowmid, midhig):
         asdf = subprocess.run(r"C:/w64devkit/bin/gcc snic.c -shared -o {}/snic.dll -O3 -g3".format(ROOTDIR).split(),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print(asdf)
-        snic_lib = ctypes.CDLL(f'{ROOTDIR}/snic.dll')
+        snic_lib = ctypes.CDLL(f'{ROOTDIR}/bin/snic.dll')
     else:
         snic_lib = ctypes.CDLL('path/to/libsnic.so')
 
