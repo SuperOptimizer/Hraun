@@ -114,13 +114,6 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(QLabel("Iso Value:"))
         self.control_layout.addWidget(self.iso_slider)
 
-        self.opacity_cap_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_cap_slider.setRange(0, 255)
-        self.opacity_cap_slider.setValue(self.opacity_cap)
-        self.opacity_cap_slider.valueChanged.connect(self.update_opacity_cap)
-        self.control_layout.addWidget(QLabel("Opacity Cap:"))
-        self.control_layout.addWidget(self.opacity_cap_slider)
-
         self.control_layout.addWidget(QLabel("Downscale Factor:"))
         self.downscale_factor = QSpinBox()
         self.downscale_factor.setRange(1, 8)  # Allow downscaling from 1x to 8x
@@ -139,10 +132,10 @@ class MainWindow(QMainWindow):
         self.volume_property = vtk.vtkVolumeProperty()
         self.volume_property.SetInterpolationTypeToLinear()
         self.volume_property.ShadeOn()
-        self.volume_property.SetAmbient(0.1)
-        self.volume_property.SetDiffuse(0.5)
-        self.volume_property.SetSpecular(0.2)
-        self.volume_property.SetSpecularPower(5)
+        self.volume_property.SetAmbient(0.8)
+        self.volume_property.SetDiffuse(0.3)
+        self.volume_property.SetSpecular(0.1)
+        self.volume_property.SetSpecularPower(10)
 
         self.color_transfer_function = self.create_viridis_color_function()
         self.volume_property.SetColor(self.color_transfer_function)
@@ -156,41 +149,8 @@ class MainWindow(QMainWindow):
 
         self.renderer.AddVolume(self.volume)
 
-        self.setup_lighting()
-
         self.renderer.ResetCamera()
 
-    def setup_lighting(self):
-        for light in self.lights:
-            self.renderer.RemoveLight(light)
-        self.lights.clear()
-
-        key_light = vtk.vtkLight()
-        key_light.SetIntensity(0.75)
-        key_light.SetPosition(-10, 10, 10)
-        key_light.SetFocalPoint(0, 0, 0)
-        key_light.SetColor(1.0, 1.0, 1.0)
-        key_light.SetLightTypeToCameraLight()
-        self.renderer.AddLight(key_light)
-        self.lights.append(key_light)
-
-        fill_light = vtk.vtkLight()
-        fill_light.SetIntensity(0.5)
-        fill_light.SetPosition(10, -10, -10)
-        fill_light.SetFocalPoint(0, 0, 0)
-        fill_light.SetColor(0.8, 0.8, 1.0)
-        fill_light.SetLightTypeToCameraLight()
-        self.renderer.AddLight(fill_light)
-        self.lights.append(fill_light)
-
-        back_light = vtk.vtkLight()
-        back_light.SetIntensity(0.35)
-        back_light.SetPosition(0, 0, -10)
-        back_light.SetFocalPoint(0, 0, 0)
-        back_light.SetColor(1.0, 1.0, 0.8)
-        back_light.SetLightTypeToCameraLight()
-        self.renderer.AddLight(back_light)
-        self.lights.append(back_light)
 
     def update_timestamp_combo(self):
         self.timestamp_combo.clear()
@@ -300,18 +260,6 @@ class MainWindow(QMainWindow):
             self.volume.SetProperty(self.volume_property)
             self.renderer.AddVolume(self.volume)
 
-
-        bounds = image_data.GetBounds()
-        center = [(bounds[1] + bounds[0]) / 2, (bounds[3] + bounds[2]) / 2, (bounds[5] + bounds[4]) / 2]
-        radius = max(bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4]) / 2
-
-        self.lights[0].SetPosition(center[0] - radius, center[1] + radius, center[2] + radius)
-        self.lights[1].SetPosition(center[0] + radius, center[1] - radius, center[2] - radius)
-        self.lights[2].SetPosition(center[0], center[1], center[2] - radius)
-
-        for light in self.lights:
-            light.SetFocalPoint(center[0], center[1], center[2])
-
         self.update_opacity_transfer_function()
 
         self.renderer.ResetCamera()
@@ -337,6 +285,7 @@ class MainWindow(QMainWindow):
 
     def update_iso_value(self, value):
         self.iso_value = value
+        self.opacity_cap = value
         self.update_opacity_transfer_function()
 
     def update_opacity_cap(self, value):
