@@ -10,8 +10,6 @@ from PIL import Image
 import zarr
 from numcodecs import Blosc
 
-USER = os.environ.get('SCROLLPRIZE_USER')
-PASS = os.environ.get('SCROLLPRIZE_PASS')
 VOLMAN_PATH = 'D:/vesuvius.volman'
 
 the_index = {
@@ -395,8 +393,8 @@ the_index = {
   },
 }
 
-def _download(url):
-  response = requests.get(url, auth=(USER, PASS))
+def _download(url, user, password):
+  response = requests.get(url, auth=(user, password))
   if response.status_code == 200:
     filedata = io.BytesIO(response.content)
     if url.endswith('.tif'):
@@ -418,6 +416,8 @@ def _download(url):
 
 class ZVol:
   def __init__(self, zroot='C:/vesuvius.zarr', create=False, overwrite=False, modify=False):
+    self.username = None
+    self.password = None
     synchronizer = zarr.ProcessSynchronizer(zroot + '.sync')
     compressor = numcodecs.Blosc(cname='blosclz', clevel=9, shuffle=Blosc.BITSHUFFLE)
     if create and not overwrite and os.path.exists(zroot):
@@ -440,6 +440,10 @@ class ZVol:
                                                 dtype='u1', compressor=compressor, write_empty_chunks=False)
           self.root[f'{scroll}'].zeros(timestamp + '_dlmask', shape=(depth), dtype='u1')
 
+  def update_userpass(self, username, password):
+      self.username = username
+      self.password = password
+
   def chunk(self, scroll, timestamp, start, size):
     z,y,x = start
     endz, endy, endx = z + size[0], y + size[1], x + size[2]
@@ -448,19 +452,19 @@ class ZVol:
     url = the_index[scroll][timestamp]['url']
     ext = the_index[scroll][timestamp]['ext']
 
-    #for i in range(z,endz):
-    #  if self.root[f'{scroll}/{timestamp}_dlmask'][i] == 0:
-    #    src_filename = f"{i:0{len(str(depth))}d}.{ext}"
-    #    print(f"Downloading {url}{src_filename}")
-    #    data = _download(url + src_filename)
-    #
-    #    if timestamp == '20231201141544':
-    #      maskname = src_filename.replace('tif', 'png')
-    #      mask = _download(
-    #                  'https://dl.ash2txt.org/community-uploads/james/PHerc0332/volumes_masked/20231027191953_unapplied_masks/' + maskname)
-    #      data[mask == 0] = 0
-    #    self.root[f'{scroll}/{timestamp}_dlmask'][i] = 1
-    #    self.root[f'{scroll}/{timestamp}'][i] = data
+    for i in range(z,endz):
+      if self.root[f'{scroll}/{timestamp}_dlmask'][i] == 0:
+        src_filename = f"{i:0{len(str(depth))}d}.{ext}"
+        print(f"Downloading {url}{src_filename}")
+        data = _download(url + src_filename, self.username, self.password)
+
+        if timestamp == '20231201141544':
+          maskname = src_filename.replace('tif', 'png')
+          mask = _download(
+                      'https://dl.ash2txt.org/community-uploads/james/PHerc0332/volumes_masked/20231027191953_unapplied_masks/' + maskname)
+          data[mask == 0] = 0
+        self.root[f'{scroll}/{timestamp}_dlmask'][i] = 1
+        self.root[f'{scroll}/{timestamp}'][i] = data
     return self.root[f'{scroll}/{timestamp}'][z: endz, y: endy, x: endx]
 
 import tiffs2zarr

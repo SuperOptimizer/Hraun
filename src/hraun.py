@@ -13,6 +13,7 @@ import skimage
 import preprocessing
 import zarr
 import skimage
+from skimage.measure import label
 
 
 class CustomQVTKRenderWindowInteractor(QVTKRenderWindowInteractor):
@@ -75,6 +76,18 @@ class MainWindow(QMainWindow):
         self.setup_control_panel()
 
     def setup_control_panel(self):
+
+        # Add username input
+        self.control_layout.addWidget(QLabel("ash2txt.org Username:"))
+        self.username_input = QLineEdit()
+        self.control_layout.addWidget(self.username_input)
+
+        # Add password input
+        self.control_layout.addWidget(QLabel("ash2txt.org Password:"))
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)  # Hide password characters
+        self.control_layout.addWidget(self.password_input)
+
         self.control_layout.addWidget(QLabel("Volume ID:"))
         self.volume_combo = QComboBox()
         self.volume_combo.addItems(the_index.keys())
@@ -113,6 +126,13 @@ class MainWindow(QMainWindow):
         self.iso_slider.valueChanged.connect(self.update_iso_value)
         self.control_layout.addWidget(QLabel("Iso Value:"))
         self.control_layout.addWidget(self.iso_slider)
+
+        self.noise_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.noise_size_slider.setRange(0, 1024)
+        self.noise_size_slider.setValue(self.iso_value)
+        #self.noise_size_slider.valueChanged.connect(self.update_iso_value)
+        self.control_layout.addWidget(QLabel("Noise Size Value:"))
+        self.control_layout.addWidget(self.noise_size_slider)
 
         self.control_layout.addWidget(QLabel("Downscale Factor:"))
         self.downscale_factor = QSpinBox()
@@ -207,6 +227,7 @@ class MainWindow(QMainWindow):
         print(f"Offsets: {offset_dims}")
         print(f"Chunk size: {chunk_dims}")
 
+        self.volman.update_userpass(self.username_input.text(), self.password_input.text())
         #voxel_data = self.volman.chunk(volume_id, timestamp, offset_dims, chunk_dims)
         #voxel_data = skimage.util.apply_parallel(skimage.measure.block_reduce, voxel_data,
         #                                         extra_keywords={'block_size': self.downscale_factor.value(),
@@ -218,29 +239,45 @@ class MainWindow(QMainWindow):
         print("preprocessed data")
 
         if volume_id == 'Scroll1':
-            self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll1.zarr', 'r')
+            #self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll1.zarr', 'r')
+            self.zarray = zarr.open(r'C:\vesuvius_scroll1_downscaled.zarr', 'r')
+
             myiso = 120
         elif volume_id == 'Scroll2':
             self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll2.zarr', 'r')
             myiso = 128
         elif volume_id == 'Scroll3':
-            self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll3_invariant.zarr', 'r')
+            #self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll3_invariant.zarr', 'r')
+            self.zarray = zarr.open(r'C:\vesuvius_scroll3_downscaled.zarr', 'r')
+
             myiso = 100
         elif volume_id == 'Scroll4':
-            self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll4.zarr', 'r')
+            #self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll4.zarr', 'r')
+            self.zarray = zarr.open(r'C:\vesuvius_scroll4_downscaled.zarr', 'r')
             myiso = 100
         print("got color data")
-        color_chunk = self.zarray[offset_dims[1]:offset_dims[1] + chunk_dims[1],
-                      offset_dims[2]:offset_dims[2] + chunk_dims[2],
-                      offset_dims[0]:offset_dims[0] + chunk_dims[0]]
-        color_chunk = skimage.util.apply_parallel(skimage.measure.block_reduce, color_chunk,
-                                                  extra_keywords={'block_size': self.downscale_factor.value(),
-                                                                  'func': np.max})
+        #color_chunk = self.zarray[offset_dims[1]:offset_dims[1] + chunk_dims[1],
+        #              offset_dims[2]:offset_dims[2] + chunk_dims[2],
+        #              offset_dims[0]:offset_dims[0] + chunk_dims[0]]
+        color_chunk = self.zarray[0:self.zarray.shape[0], 0:self.zarray.shape[1], 0:self.zarray.shape[2]]
+        #color_chunk = skimage.util.apply_parallel(skimage.measure.block_reduce, color_chunk,
+        #                                          extra_keywords={'block_size': self.downscale_factor.value(),
+        #                                                          'func': np.max})
 
 
         print("transposing color data")
         color_chunk = np.transpose(color_chunk, (2,0,1))
+        color_chunk = (skimage.util.apply_parallel(skimage.filters.gaussian, color_chunk, extra_keywords={'sigma':2})*255).astype(np.uint8)
+        color_chunk = (skimage.util.apply_parallel(skimage.filters.unsharp_mask, color_chunk,extra_keywords={'radius':1.0,'amount':1.0})*255).astype(np.uint8)
         print("masking color data")
+
+        print("removing small connected noise")
+        #labels = label(color_chunk > self.iso_value, connectivity=1, return_num=False)
+        #component_sizes = np.bincount(labels.ravel())
+        #mask = np.isin(labels, np.where(component_sizes >= self.noise_size_slider.value())[0])
+        #color_chunk *= mask
+
+
         #color_chunk[voxel_data < myiso] = 0
         print("reducing color data")
 
