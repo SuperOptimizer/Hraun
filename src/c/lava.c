@@ -19,13 +19,12 @@ static u8 get_bit_position(s32 z, s32 y, s32 x)
 bitmask3d bitmask3d_new(s32 depth, s32 height, s32 width)
 {
     s32 total_bytes = (depth + 1) / 2 * ((height + 1) / 2) * ((width + 1) / 2);
-    bitmask3d mask = {
+    return (bitmask3d){
         .data = calloc(total_bytes, sizeof(u8)),
         .depth = depth,
         .height = height,
         .width = width
     };
-    return mask;
 }
 
 void bitmask3d_free(bitmask3d* mask)
@@ -82,10 +81,15 @@ void bitmask3d_print(bitmask3d* mask)
 
 bitmask3d isomask(chunk* chunk, u8 iso)
 {
-    bitmask3d ret = bitmask3d_new(chunk->depth, chunk->height, chunk->width);
+    assert(chunk->dtype == U8);
+    auto ret = bitmask3d_new(chunk->depth, chunk->height, chunk->width);
     for(s32 z = 0; z < chunk->depth; z++)
         for(s32 y = 0; y < chunk->height; y++)
-            for(s32 x = 0; x < chunk->width; x++)
-                bitmask3d_set(&ret, z, y, x, chunk_get(&chunk, z, y, x) > iso);
+            for(s32 x = 0; x < chunk->width; x++) {
+                u8 data;
+                chunk_get(chunk, z, y, x, &data);
+                bitmask3d_set(&ret, z, y, x, data > iso);
+            }
+    return ret;
 }
 

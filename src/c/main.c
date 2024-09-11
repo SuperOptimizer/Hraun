@@ -15,7 +15,7 @@ int main(int argc, char** argv)
   chunk asdf = cvol_chunk(&cvol,2048,2048,2048,256,256,256);
   bitmask3d bitmask3d = bitmask3d_new(256,256,256);
   bitmask3d_get(&bitmask3d, 128,128,128);
-  printf("%d\n",chunk_get(&asdf,0,0,0));
+  //printf("%d\n",chunk_get(&asdf,0,0,0));
   printf("Hello World!\n");
   return 0;
 }

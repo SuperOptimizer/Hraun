@@ -19,7 +19,9 @@ add_executable(lava
         lava.c
         lava.h
         snic.c
-        main.c)
+        main.c
+        chunk.c
+        chunk.h)
 
 target_link_libraries(lava PUBLIC cvol)
 
