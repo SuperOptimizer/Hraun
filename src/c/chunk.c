@@ -23,33 +23,59 @@ void chunk_free(chunk* chunk)
 
 static void* chunk_getptr(chunk* chunk, s32 z, s32 y, s32 x)
 {
+  size_t index = z * chunk->width * chunk->height + y * chunk->width + x;
+  size_t byte_offset;
+
   switch(chunk->dtype)
   {
-  case U8: case S8:             return (u8*) &chunk->data[z * chunk->width * chunk->height + y * chunk->width + x]; break;
-  case U16: case S16: case F16: return (u16*)&chunk->data[z * chunk->width * chunk->height + y * chunk->width + x]; break;
-  case U32: case S32: case F32: return (u32*)&chunk->data[z * chunk->width * chunk->height + y * chunk->width + x]; break;
-  case U64: case S64: case F64: return (u64*)&chunk->data[z * chunk->width * chunk->height + y * chunk->width + x]; break;
+  case U8:  byte_offset = index * sizeof(u8);  break;
+  case S8:  byte_offset = index * sizeof(s8);  break;
+  case U16: byte_offset = index * sizeof(u16); break;
+  case S16: byte_offset = index * sizeof(s16); break;
+  case U32: byte_offset = index * sizeof(u32); break;
+  case S32: byte_offset = index * sizeof(s32); break;
+  case U64: byte_offset = index * sizeof(u64); break;
+  case S64: byte_offset = index * sizeof(s64); break;
+  case F16: byte_offset = index * sizeof(f16); break;
+  case F32: byte_offset = index * sizeof(f32); break;
+  case F64: byte_offset = index * sizeof(f64); break;
+  default: die("bad dtype");
   }
-  die("bad dtype");
+
+  return (u8*)chunk->data + byte_offset;
 }
 
 void chunk_get(chunk* chunk, s32 z, s32 y, s32 x, void* val){
   switch(chunk->dtype)
   {
-  case U8: case S8:             *(u8*)val = *(u8*)chunk_getptr(chunk, z, y, x); break;
-  case U16: case S16: case F16: *(u16*)val = *(u16*)chunk_getptr(chunk, z, y, x); break;
-  case U32: case S32: case F32: *(u32*)val = *(u32*)chunk_getptr(chunk, z, y, x); break;
-  case U64: case S64: case F64: *(u64*)val = *(u64*)chunk_getptr(chunk, z, y, x); break;
+  case U8: *(u8*)val =  *(u8*)chunk_getptr(chunk, z, y, x); break;
+  case S8: *(s8*)val =  *(s8*)chunk_getptr(chunk, z, y, x); break;
+  case U16: *(u16*)val = *(u16*)chunk_getptr(chunk, z, y, x); break;
+  case S16: *(s16*)val = *(s16*)chunk_getptr(chunk, z, y, x); break;
+  case U32: *(u32*)val = *(u32*)chunk_getptr(chunk, z, y, x); break;
+  case S32: *(s32*)val = *(s32*)chunk_getptr(chunk, z, y, x); break;
+  case U64: *(u64*)val = *(u64*)chunk_getptr(chunk, z, y, x); break;
+  case S64: *(s64*)val = *(s64*)chunk_getptr(chunk, z, y, x); break;
+  case F16: *(f16*)val = *(f16*)chunk_getptr(chunk, z, y, x); break;
+  case F32: *(f32*)val = *(f32*)chunk_getptr(chunk, z, y, x); break;
+  case F64: *(f64*)val = *(f64*)chunk_getptr(chunk, z, y, x); break;
   }
 }
 
 void chunk_set(chunk* chunk, s32 z, s32 y, s32 x, void* val){
   switch(chunk->dtype)
   {
-  case U8: case S8:             *(u8*)chunk_getptr(chunk, z, y, x) = *(u8*)val; break;
-  case U16: case S16: case F16: *(u16*)chunk_getptr(chunk, z, y, x) = *(u16*)val; break;
-  case U32: case S32: case F32: *(u32*)chunk_getptr(chunk, z, y, x) = *(u32*)val; break;
-  case U64: case S64: case F64: *(u64*)chunk_getptr(chunk, z, y, x) = *(u64*)val; break;
+  case U8: *(u8*)chunk_getptr(chunk, z, y, x) = *(u8*)val; break;
+  case S8: *(s8*)chunk_getptr(chunk, z, y, x) = *(s8*)val; break;
+  case U16: *(u16*)chunk_getptr(chunk, z, y, x) = *(u16*)val; break;
+  case S16: *(s16*)chunk_getptr(chunk, z, y, x) = *(s16*)val; break;
+  case U32: *(u32*)chunk_getptr(chunk, z, y, x) = *(u32*)val; break;
+  case S32: *(s32*)chunk_getptr(chunk, z, y, x) = *(s32*)val; break;
+  case U64: *(u64*)chunk_getptr(chunk, z, y, x) = *(u64*)val; break;
+  case S64: *(s64*)chunk_getptr(chunk, z, y, x) = *(s64*)val; break;
+  case F16: *(f16*)chunk_getptr(chunk, z, y, x) = *(f16*)val; break;
+  case F32: *(f32*)chunk_getptr(chunk, z, y, x) = *(f32*)val; break;
+  case F64: *(f64*)chunk_getptr(chunk, z, y, x) = *(f64*)val; break;
   }
 }
 
@@ -64,6 +90,7 @@ chunk chunk_cast(chunk* chunk, dtype dtype){
         void* dst = chunk_getptr(&ret, z, y, x);
         void* src = chunk_getptr(chunk, z, y, x);
         cast(dst, dtype, src, chunk->dtype);
+        //printf("%d %f\n",*(u8*)src, *(f32*)dst);
       }
   return ret;
 }
