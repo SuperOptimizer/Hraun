@@ -13,22 +13,18 @@ set(CMAKE_C_FLAGS_DEBUG "-g -Og -Wall -Wextra -Wpedantic -DDEBUG")
 set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
 
 
-add_library(cvol cvol.c cvol.h)
+add_library(lavalib cvol.c cvol.h lava.c lava.h snic.c chunk.c chunk.h)
 
-add_executable(lava
-        lava.c
-        lava.h
-        snic.c
-        main.c
-        chunk.c
-        chunk.h)
+add_executable(lava main.c)
 
-target_link_libraries(lava PUBLIC cvol)
+add_executable(lavatest test.c)
 
+target_link_libraries(lava PUBLIC lavalib)
+target_link_libraries(lavatest PUBLIC lavalib)
 
-
+set_property(TARGET lavalib PROPERTY C_STANDARD 23)
+set_property(TARGET lavatest PROPERTY C_STANDARD 23)
 set_property(TARGET lava PROPERTY C_STANDARD 23)
-set_property(TARGET cvol PROPERTY C_STANDARD 23)
 
 # Print the build type
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")

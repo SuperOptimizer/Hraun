@@ -134,7 +134,7 @@ chunk cvol_chunk(cvol* cvol, s32 z, s32 y, s32 x, s32 zlen, s32 ylen, s32 xlen) 
     for (int yi = 0; yi < ylen; yi++) {
       for (int xi = 0; xi < xlen; xi++) {
         u8 data = cvol_get(cvol, zi + z, yi + y, xi + x);
-        chunk_set(&ret, zi, yi, xi, &data);
+        chunk_set_u8(&ret, zi, yi, xi, data);
       }
     }
   }
