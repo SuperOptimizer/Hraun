@@ -359,4 +359,5 @@ static inline void cast(void* dst, dtype dst_dtype, void* src, dtype src_dtype)
   } break;
 
   }
+  //printf("asdf\n");
 }
