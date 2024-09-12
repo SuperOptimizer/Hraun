@@ -21,6 +21,21 @@ int main(int argc, char** argv) {
   data[7] = chunk_get_u8(&asdf,1,1,1);
   printf("%u %u %u %u %u %u %u %u\n",data[0],data[1],data[2],data[3],data[4],data[5],data[6],data[7]);
   printf("%u\n",chunk_get_u8(&pooled,0,0,0));
+  chunk_free(&pooled);
+
+  pooled = avgpool(&asdf,2,2);
+  data[0] = chunk_get_u8(&asdf,0,0,0);
+  data[1] = chunk_get_u8(&asdf,0,0,1);
+  data[2] = chunk_get_u8(&asdf,0,1,0);
+  data[3] = chunk_get_u8(&asdf,0,1,1);
+  data[4] = chunk_get_u8(&asdf,1,0,0);
+  data[5] = chunk_get_u8(&asdf,1,0,1);
+  data[6] = chunk_get_u8(&asdf,1,1,0);
+  data[7] = chunk_get_u8(&asdf,1,1,1);
+  printf("%u %u %u %u %u %u %u %u\n",data[0],data[1],data[2],data[3],data[4],data[5],data[6],data[7]);
+  printf("%u\n",chunk_get_u8(&pooled,0,0,0));
+
+  chunk_free(&pooled);
 
   return 0;
 }

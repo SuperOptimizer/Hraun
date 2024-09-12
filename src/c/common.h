@@ -133,6 +133,14 @@ static inline f32 maxf32(f32 a, f32 b) { return a > b ? a : b; }
 static inline u8 minu8(u8 a, u8 b) { return a < b ? a : b; }
 static inline f32 minf32(f32 a, f32 b) { return a < b ? a : b; }
 
-static inline u8  avgu8(u8* data, s32 len) { u32 sum = 0; for(int i = 0; i < len; i++)sum+= data[i]; return sum / len; }
-static inline f32 avgf32(u8* data, s32 len) { f64 sum = 0; for(int i = 0; i < len; i++)sum+= data[i]; return sum / len; }
+static inline u8 avgu8(u8* data, s32 len) {
+  u32 sum = 0;
+  for(int i = 0; i < len; i++)sum+= data[i];
+  return sum / len;
+}
 
+static inline f32 avgf32(f32* data, s32 len) {
+  f64 sum = 0.0;
+  for(int i = 0; i < len; i++) sum+= data[i];
+  return sum / len;
+}
