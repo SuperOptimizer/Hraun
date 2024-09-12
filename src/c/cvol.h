@@ -11,8 +11,7 @@
 
 #define SLICE_SIZE 8192
 
-typedef struct
-{
+typedef struct {
   u8* view;
   HANDLE file_handle;
   HANDLE mapping_handle;
@@ -27,8 +26,7 @@ typedef struct
 
 // a cvol is a compressed volume of scroll data. we rely on filesystem level compression
 // to compress chunks, and zero out an amount of low bits to reduce file size.
-typedef struct cvol
-{
+typedef struct cvol {
   s32 depth, height, width;
   Mmap* slices;
 } cvol;

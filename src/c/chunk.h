@@ -2,12 +2,11 @@
 
 #include "common.h"
 
-typedef struct chunk
-{
+typedef struct chunk {
   dtype dtype;
-  s32 depth,height,width;
+  s32 depth, height, width;
   void* data;
-}chunk;
+} chunk;
 
 chunk chunk_new(dtype dtype, s32 depth, s32 height, s32 width);
 void chunk_free(chunk* chunk);

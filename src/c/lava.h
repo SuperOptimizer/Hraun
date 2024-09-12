@@ -3,8 +3,7 @@
 #include "common.h"
 
 
-typedef struct bitmask3d
-{
+typedef struct bitmask3d {
   u8* data;
   s32 depth, height, width;
 } bitmask3d;
