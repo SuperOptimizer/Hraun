@@ -8,8 +8,8 @@ endif()
 
 
 # Add compiler flags based on build type
-set(CMAKE_C_FLAGS " -march=native -m64 ")
-set(CMAKE_C_FLAGS_DEBUG "-g -O0 -Wall -Wextra -Wpedantic -DDEBUG")
+set(CMAKE_C_FLAGS " -march=native -m64 -Weverything ")
+set(CMAKE_C_FLAGS_DEBUG "-g -Og -Wall -Wextra -Wpedantic -DDEBUG")
 set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG ")
 
 

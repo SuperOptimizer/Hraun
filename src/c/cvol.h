@@ -3,12 +3,13 @@
 #include "common.h"
 #include "chunk.h"
 
+
+#define SLICE_SIZE 8192
+
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-
-
-#define SLICE_SIZE 8192
 
 typedef struct
 {
@@ -17,9 +18,10 @@ typedef struct
   HANDLE mapping_handle;
 } Mmap;
 #else
-typedef struct
-{
+typedef struct Mmap {
+  int fd;
   u8* view;
+  size_t size;
 } Mmap;
 #endif
 
@@ -31,13 +33,6 @@ typedef struct cvol
   s32 depth, height, width;
   Mmap* slices;
 } cvol;
-
-
-static  cvol cvol_new(char* path, s32 depth, s32 height, s32 width);
-static  void cvol_del(cvol* cvol);
-static  cvol cvol_open(char* cvoldir, s32 depth, s32 height, s32 width);
-static  chunk cvol_chunk(cvol* cvol, s32 z, s32 y, s32 x, s32 zlen, s32 ylen, s32 xlen);
-
 
 
 #ifdef _WIN32
@@ -66,35 +61,84 @@ static  void mmap_(const char* filename, Mmap* out) {
   if (!out->view) { die("failed to get file view"); }
 }
 
-static  Mmap munmap_(Mmap mmap) {
-  if (mmap.view) {
-    UnmapViewOfFile(mmap.view);
-    mmap.view = NULL;
+static void Mmap munmap_(Mmap* mmap) {
+  if (mmap->view) {
+    UnmapViewOfFile(mmap->view);
+    mmap->view = NULL;
   }
-  if (mmap.mapping_handle) {
-    CloseHandle(mmap.mapping_handle);
-    mmap.mapping_handle = INVALID_HANDLE_VALUE;
+  if (mmap->mapping_handle) {
+    CloseHandle(mmap->mapping_handle);
+    mmap->mapping_handle = INVALID_HANDLE_VALUE;
   }
-  if (mmap.file_handle) {
-    CloseHandle(mmap.file_handle);
-    mmap.file_handle = INVALID_HANDLE_VALUE;
+  if (mmap->file_handle) {
+    CloseHandle(mmap->file_handle);
+    mmap->file_handle = INVALID_HANDLE_VALUE;
   }
-  return mmap;
 }
 
 #else
 
-Mmap* mmap_(const char* filename)
-{
-  return
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+
+static void mmap_(const char* filename, Mmap* out) {
+  int fd = open(filename, O_RDONLY);
+  if (fd == -1) {
+    die("failed to open file");
+  }
+
+  struct stat sb;
+  if (fstat(fd, &sb) == -1) {
+    close(fd);
+    die("failed to get file size");
+  }
+
+  if (sb.st_size == 0) {
+    close(fd);
+    die("file is empty");
+  }
+
+  void* addr = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (addr == MAP_FAILED) {
+    close(fd);
+    die("failed to map file");
+  }
+
+  out->fd = fd;
+  out->view = addr;
+  out->size = sb.st_size;
+}
+
+static void munmap_(Mmap* mmap) {
+  if (mmap->view != NULL) {
+    if (munmap(mmap->view, mmap->size) == -1) {
+      die("failed to unmap file");
+    }
+    mmap->view = NULL;
+  }
+  if (mmap->fd != -1) {
+    close(mmap->fd);
+    mmap->fd = -1;
+  }
+  mmap->size = 0;
 }
 
 #endif
 
 
+static  cvol cvol_new(char* path, s32 depth, s32 height, s32 width);
+static  void cvol_del(cvol* cvol);
+static  cvol cvol_open(char* cvoldir, s32 depth, s32 height, s32 width);
+static  chunk cvol_chunk(cvol* cvol, s32 z, s32 y, s32 x, s32 zlen, s32 ylen, s32 xlen);
+
+
 static  cvol cvol_new(char* path, s32 depth, s32 height, s32 width) {
   Mmap* slices = calloc(depth * sizeof(Mmap),1);
-  static char fullpath[512] = {'\0'};
+  static char fullpath[4096] = {'\0'};
   for (int z = 0; z < depth; z++) {
     sprintf(fullpath, "%s/%05d.slice", path, z);
     mmap_(fullpath, &slices[z]);
@@ -106,7 +150,7 @@ static  cvol cvol_new(char* path, s32 depth, s32 height, s32 width) {
 
 static  void cvol_del(cvol* cvol) {
   for (int z = 0; z < cvol->depth; z++)
-    cvol->slices[z] = munmap_(cvol->slices[z]);
+    munmap_(&cvol->slices[z]);
   free(cvol->slices);
 }
 
