@@ -302,7 +302,8 @@ def find_seed_points(arr, nseeds):
 
 @timing_decorator
 #@jit(nopython=True)
-def walk(arr, seeds, labels):
+def walk(arr, seeds):
+  labels = np.zeros(arr.shape, dtype=np.uint16)
   max_iter = 10
   for label,seed in enumerate(seeds):
     z,y,x = seed
@@ -333,8 +334,8 @@ def walk(arr, seeds, labels):
         print("found no candidates")
   return labels
 
-#@timing_decorator
-#@jit(nopython=True)
+@timing_decorator
+@jit(nopython=True)
 def get_neighbors(labels, num_labels):
   neighbors = np.zeros((num_labels,num_labels),dtype=np.uint16)
   num_neighbors = np.zeros((num_labels,),dtype=np.uint16)
@@ -359,9 +360,8 @@ def get_neighbors(labels, num_labels):
 
 @timing_decorator
 def segment(arr):
-  labels = np.zeros(arr.shape, dtype=np.uint16)
   maxima, minima = find_seed_points(arr, 1024)
-  labels = walk(arr, maxima, labels)
+  labels = walk(arr, maxima)
   neighbors = get_neighbors(labels, 1030)
   print(neighbors)
   print(maxima)
