@@ -140,6 +140,9 @@ static  cvol cvol_new(char* path, s32 depth, s32 height, s32 width) {
   Mmap* slices = calloc(depth * sizeof(Mmap),1);
   static char fullpath[4096] = {'\0'};
   for (int z = 0; z < depth; z++) {
+    if(depth % 1000 == 0) {
+      printf("mapping %d\n",z);
+    }
     sprintf(fullpath, "%s/%05d.slice", path, z);
     mmap_(fullpath, &slices[z]);
   }
