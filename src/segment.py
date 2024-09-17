@@ -206,27 +206,27 @@ def pool_3d_uint16(input_array, kernel_size, stride, pool_type, dilation):
 
   return output
 
-@timing_decorator
+@jit(nopython=True)
 def avgpool(input_array, kernel_size, stride, dilation):
   return pool_3d_float32(input_array, kernel_size, stride, PoolType.AVG.value, dilation)
 
-@timing_decorator
+@jit(nopython=True)
 def maxpool(input_array, kernel_size, stride, dilation):
   return pool_3d_float32(input_array, kernel_size, stride, PoolType.MAX.value, dilation)
 
-@timing_decorator
+@jit(nopython=True)
 def minpool(input_array, kernel_size, stride, dilation):
   return pool_3d_float32(input_array, kernel_size, stride, PoolType.MIN.value, dilation)
 
-@timing_decorator
+@jit(nopython=True)
 def sumpool(input_array, kernel_size, stride, dilation):
   return pool_3d_float32(input_array, kernel_size, stride, PoolType.SUM.value, dilation)
 
-@timing_decorator
+@jit(nopython=True)
 def argmaxpool(input_array, kernel_size, stride, dilation):
   return pool_3d_uint16(input_array, kernel_size, stride, PoolType.ARGMAX.value, dilation)
 
-@timing_decorator
+@jit(nopython=True)
 def argminpool(input_array, kernel_size, stride, dilation):
   return pool_3d_uint16(input_array, kernel_size, stride, PoolType.ARGMIN.value, dilation)
 
@@ -264,6 +264,7 @@ def download(url):
 
 
 @timing_decorator
+@jit(nopython=True)
 def find_seed_points(arr, nseeds):
   maxiter = 10
 
@@ -301,8 +302,8 @@ def find_seed_points(arr, nseeds):
   return maxima, minima
 
 @timing_decorator
-#@jit(nopython=True)
-def walk(arr, seeds):
+@jit(nopython=True)
+def walk(arr, seeds, randints, randseed):
   labels = np.zeros(arr.shape, dtype=np.uint16)
   max_iter = 10
   for label,seed in enumerate(seeds):
@@ -328,7 +329,7 @@ def walk(arr, seeds):
           nextval -= 16.0
       if len(candidates) > 0:
         #print(f"adding {z},{y},{x} to label {label}")
-        z,y,x = random.choice(candidates)
+        z,y,x = candidates[randints[randseed]%len(candidates)]
         labels[z,y,x] = label
       else:
         print("found no candidates")
@@ -361,8 +362,13 @@ def get_neighbors(labels, num_labels):
 @timing_decorator
 def segment(arr):
   maxima, minima = find_seed_points(arr, 1024)
-  labels = walk(arr, maxima)
-  neighbors = get_neighbors(labels, 1030)
+  randints = list()
+  for z in range(65536):
+    randints.append(z)
+  random.shuffle(randints)
+  randints = np.asarray(randints)
+  labels = walk(arr, maxima, randints, random.randint(0,65535))
+  neighbors = get_neighbors(labels, 1024)
   print(neighbors)
   print(maxima)
   print(minima)
