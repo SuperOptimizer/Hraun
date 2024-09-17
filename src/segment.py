@@ -300,41 +300,70 @@ def find_seed_points(arr, nseeds):
       minima.add((z, y, x))
   return maxima, minima
 
-#@timing_decorator
+@timing_decorator
 #@jit(nopython=True)
 def walk(arr, seeds, labels):
-  max_iter = 100
-  next_label = 1
-  for seed in seeds:
-    label = next_label
-    next_label += 1
+  max_iter = 10
+  for label,seed in enumerate(seeds):
     z,y,x = seed
+
     for i in range(max_iter):
+      tries = 0
       nextval = arr[z, y, x]
       candidates = []
-      while len(candidates) == 0:
+      while len(candidates) == 0 and tries < 10:
+        tries += 1
         for zi in range(-1,2):
           for yi in range(-1,2):
             for xi in range(-1,2):
               if z + zi < 0 or z + zi >= arr.shape[0] or y + yi < 0 or y + yi >= arr.shape[1] or x + xi < 0 or x + xi >= arr.shape[2]:
                 continue
               if arr[z+zi, y+yi, x+xi] >= nextval and labels[z+zi, y+yi, x+xi] == 0:
-                candidates.append((z+zi, y+yi, x+xi))
-        #TODO: figure out what to use for this. it depends on the range of the input data, we should only try
-        # 8 or 16 total divisions before bailing. It looks like for now we're dealing with 0 - 255.
-        # so -16.0 for now
-        nextval -= 16.0
-      print(f"adding {z},{y},{x} to label {label}")
-      z,y,x = random.choice(candidates)
-      labels[z,y,x] = label
+                  candidates.append((z+zi, y+yi, x+xi))
+        if len(candidates) == 0:
+          #TODO: figure out what to use for this. it depends on the range of the input data, we should only try
+          # 8 or 16 total divisions before bailing. It looks like for now we're dealing with 0 - 255.
+          # so -16.0 for now
+          nextval -= 16.0
+      if len(candidates) > 0:
+        #print(f"adding {z},{y},{x} to label {label}")
+        z,y,x = random.choice(candidates)
+        labels[z,y,x] = label
+      else:
+        print("found no candidates")
+  return labels
+
+#@timing_decorator
+#@jit(nopython=True)
+def get_neighbors(labels, num_labels):
+  neighbors = np.zeros((num_labels,num_labels),dtype=np.uint16)
+  num_neighbors = np.zeros((num_labels,),dtype=np.uint16)
+  for z in range(labels.shape[0]):
+    for y in range(labels.shape[1]):
+      for x in range(labels.shape[2]):
+        l = labels[z,y,x]
+        if l == 0:
+          continue
+        for zi in range(-1,2):
+          for yi in range(-1,2):
+            for xi in range(-1,2):
+              if zi == 0 and yi == 0 and xi == 0:
+                continue
+              if z+zi < 0 or z+zi >= labels.shape[0] or y+yi < 0 or y+yi >= labels.shape[1] or x+xi < 0 or x+xi >= labels.shape[2]:
+                continue
+              if labels[z+zi,y+yi,x+xi] > 0 and labels[z+zi,y+yi,x+xi] != l:
+                neighbors[l][num_neighbors[l]] = labels[z+zi,y+yi,x+xi]
+                num_neighbors[l]+=1
+  return neighbors
 
 
 @timing_decorator
 def segment(arr):
   labels = np.zeros(arr.shape, dtype=np.uint16)
   maxima, minima = find_seed_points(arr, 1024)
-  walk(arr, maxima, labels)
-
+  labels = walk(arr, maxima, labels)
+  neighbors = get_neighbors(labels, 1030)
+  print(neighbors)
   print(maxima)
   print(minima)
 
@@ -342,5 +371,5 @@ def segment(arr):
 if __name__ == "__main__":
   data = download(
     "https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volume_grids/20230205180739/cell_yxz_008_008_014.tif")
-  data = avgpool(data, (2, 2, 2), (2, 2, 2), (1, 1, 1))
+  data = avgpool(data, (4, 4, 4), (4, 4, 4), (1, 1, 1))
   segment(data)
