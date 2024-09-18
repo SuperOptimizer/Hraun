@@ -32,9 +32,29 @@ import numpy as np
 import platform
 import os
 import subprocess
+import time
+from functools import wraps
+
+
+
+
 
 ROOTDIR = os.path.dirname(os.path.abspath(__file__))
-SUPERPIXEL_MAX_NEIGHS = 56  # Replace with the actual value from your C code
+SUPERPIXEL_MAX_NEIGHS = 56*2  # Replace with the actual value from your C code
+
+
+
+
+def timing_decorator(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        print(f"{func.__name__} executed in {elapsed_time:.6f} seconds")
+        return result
+    return wrapper
 
 class Superpixel:
     def __init__(self):
@@ -63,18 +83,16 @@ class SuperpixelCType(ctypes.Structure):
     ]
 
 
-# Call the SNIC function from Python
+@timing_decorator
 def snic(img, d_seed, compactness, lowmid, midhig):
-    # Load the shared library
     if platform.system() == 'Windows':
         asdf = subprocess.run(r"C:/w64devkit/bin/gcc snic.c -shared -o {}/snic.dll -O3 -g3".format(ROOTDIR).split(),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print(asdf)
-        snic_lib = ctypes.CDLL(f'{ROOTDIR}/bin/snic.dll')
+        snic_lib = ctypes.CDLL(f'{ROOTDIR}/snic.dll')
     else:
         snic_lib = ctypes.CDLL('path/to/libsnic.so')
 
-    # Define the data types for the C function arguments
     snic_lib.snic.argtypes = [
         np.ctypeslib.ndpointer(dtype=np.float32),  # img
         ctypes.c_int,  # lx
