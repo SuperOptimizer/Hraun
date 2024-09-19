@@ -32,14 +32,11 @@ import numpy as np
 import platform
 import os
 import subprocess
-import time
-from functools import wraps
 import numba
 
 from common import timing_decorator, ROOTDIR
 
 SUPERPIXEL_MAX_NEIGHS = 56*2  # Replace with the actual value from your C co cde
-
 
 spec = [
     ('x', numba.float32),

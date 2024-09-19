@@ -10,6 +10,8 @@ from vtkmodules.util import numpy_support
 import numpy as np
 import skimage
 
+import common, preprocessing, numbamath
+
 
 class CustomQVTKRenderWindowInteractor(QVTKRenderWindowInteractor):
     def __init__(self, parent=None, **kw):
@@ -54,7 +56,6 @@ class MainWindow(QMainWindow):
 
         self.lights = []
 
-        self.volman = ZVol(create=False, overwrite=False, modify=True)
         self.voxel_data = None
         self.volume = None
         self.iso_value = 0
@@ -64,6 +65,13 @@ class MainWindow(QMainWindow):
         self.color_transfer_function = None
         self.opacity_transfer_function = None
 
+        self.scroll_timestamps = {
+            '1': ['20230205180739', '20230206171837'],
+            '2': ['20230206082907', '20230210143520', '20230212125146'],
+            '3': ['20231027191953', '20231117143551'],
+            '4': ['20231107190228']
+        }
+
         self.picked_points = vtk.vtkPoints()
         self.points_actor = None
         self.setup_point_picking()
@@ -71,50 +79,34 @@ class MainWindow(QMainWindow):
         self.setup_control_panel()
 
     def setup_control_panel(self):
+        # Scroll number input
+        self.control_layout.addWidget(QLabel("Scroll Number:"))
+        self.scroll_combo = QComboBox()
+        self.scroll_combo.addItems(['1', '2', '3', '4'])
+        self.scroll_combo.currentTextChanged.connect(self.update_timestamp_options)
+        self.control_layout.addWidget(self.scroll_combo)
 
-        # Add username input
-        self.control_layout.addWidget(QLabel("ash2txt.org Username:"))
-        self.username_input = QLineEdit()
-        self.control_layout.addWidget(self.username_input)
-
-        # Add password input
-        self.control_layout.addWidget(QLabel("ash2txt.org Password:"))
-        self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)  # Hide password characters
-        self.control_layout.addWidget(self.password_input)
-
-        self.control_layout.addWidget(QLabel("Volume ID:"))
-        self.volume_combo = QComboBox()
-        self.volume_combo.addItems(the_index.keys())
-        self.volume_combo.currentTextChanged.connect(self.update_timestamp_combo)
-        self.control_layout.addWidget(self.volume_combo)
-
-        self.vol_dim_label = QLabel("Volume Dimensions (z,y,x):")
-        self.control_layout.addWidget(self.vol_dim_label)
-
+        # Timestamp input
         self.control_layout.addWidget(QLabel("Timestamp:"))
         self.timestamp_combo = QComboBox()
         self.control_layout.addWidget(self.timestamp_combo)
-        self.timestamp_combo.currentTextChanged.connect(self.update_dimensions)
 
-        self.control_layout.addWidget(QLabel("Offset Dimensions (z,y,x):"))
-        offset_layout = QHBoxLayout()
-        self.offset_z = QLineEdit("0")
-        self.offset_y = QLineEdit("0")
-        self.offset_x = QLineEdit("0")
-        for offset in [self.offset_z, self.offset_y, self.offset_x]:
-            offset_layout.addWidget(offset)
-        self.control_layout.addLayout(offset_layout)
+        # Z, Y, X coordinates input
+        self.control_layout.addWidget(QLabel("Coordinates (z,y,x):"))
+        coord_layout = QHBoxLayout()
+        self.coord_z = QLineEdit("9")
+        self.coord_y = QLineEdit("9")
+        self.coord_x = QLineEdit("9")
+        for coord in [self.coord_z, self.coord_y, self.coord_x]:
+            coord_layout.addWidget(coord)
+        self.control_layout.addLayout(coord_layout)
 
-        self.control_layout.addWidget(QLabel("Chunk size (z,y,x):"))
-        chunk_layout = QHBoxLayout()
-        self.chunk_z = QLineEdit("128")
-        self.chunk_y = QLineEdit("128")
-        self.chunk_x = QLineEdit("128")
-        for chunk in [self.chunk_z, self.chunk_y, self.chunk_x]:
-            chunk_layout.addWidget(chunk)
-        self.control_layout.addLayout(chunk_layout)
+        # Load Data button
+        self.load_button = QPushButton("Load Data")
+        self.load_button.clicked.connect(self.load_voxel_data)
+        self.control_layout.addWidget(self.load_button)
 
+        # Iso Value slider
         self.iso_slider = QSlider(Qt.Orientation.Horizontal)
         self.iso_slider.setRange(0, 255)
         self.iso_slider.setValue(self.iso_value)
@@ -122,24 +114,12 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(QLabel("Iso Value:"))
         self.control_layout.addWidget(self.iso_slider)
 
-        self.noise_size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.noise_size_slider.setRange(0, 1024)
-        self.noise_size_slider.setValue(self.iso_value)
-        #self.noise_size_slider.valueChanged.connect(self.update_iso_value)
-        self.control_layout.addWidget(QLabel("Noise Size Value:"))
-        self.control_layout.addWidget(self.noise_size_slider)
+        # Initialize timestamp options
+        self.update_timestamp_options(self.scroll_combo.currentText())
 
-        self.control_layout.addWidget(QLabel("Downscale Factor:"))
-        self.downscale_factor = QSpinBox()
-        self.downscale_factor.setRange(1, 8)  # Allow downscaling from 1x to 8x
-        self.downscale_factor.setValue(1)
-        self.control_layout.addWidget(self.downscale_factor)
-
-        self.load_button = QPushButton("Load Data")
-        self.load_button.clicked.connect(self.load_voxel_data)
-        self.control_layout.addWidget(self.load_button)
-
-        self.update_timestamp_combo()
+    def update_timestamp_options(self, scroll_number):
+        self.timestamp_combo.clear()
+        self.timestamp_combo.addItems(self.scroll_timestamps[scroll_number])
 
     def setup_vtk_pipeline(self):
         self.volume_mapper = vtk.vtkSmartVolumeMapper()
@@ -166,120 +146,28 @@ class MainWindow(QMainWindow):
 
         self.renderer.ResetCamera()
 
-
-    def update_timestamp_combo(self):
-        self.timestamp_combo.clear()
-        volume_id = self.volume_combo.currentText()
-        if volume_id in the_index:
-            self.timestamp_combo.addItems(the_index[volume_id].keys())
-        self.update_dimensions()
-
-    def update_dimensions(self):
-        volume_id = self.volume_combo.currentText()
-        timestamp = self.timestamp_combo.currentText()
-        if volume_id and timestamp:
-            dimensions = the_index[volume_id][timestamp]
-            if 'depth' in dimensions and 'height' in dimensions and 'width' in dimensions:
-                self.vol_dim_label.setText(
-                    f"Volume Dimensions (z,y,x): {dimensions['depth']}, {dimensions['height']}, {dimensions['width']}")
-            else:
-                self.vol_dim_label.setText("Volume Dimensions: Not available")
-
-    def validate_dimensions(self):
-        volume_id = self.volume_combo.currentText()
-        timestamp = self.timestamp_combo.currentText()
-        if not volume_id or not timestamp:
-            return False
-
-        vol_dims = the_index[volume_id][timestamp]
-        if 'depth' not in vol_dims or 'height' not in vol_dims or 'width' not in vol_dims:
-            QMessageBox.warning(self, "Invalid Dimensions",
-                                "Dimension information is not available for the selected item.")
-            return False
-
-        offsets = [int(self.offset_z.text()), int(self.offset_y.text()), int(self.offset_x.text())]
-        chunks = [int(self.chunk_z.text()), int(self.chunk_y.text()), int(self.chunk_x.text())]
-
-        for i, (offset, chunk, vol_dim) in enumerate(
-                zip(offsets, chunks, [vol_dims['depth'], vol_dims['height'], vol_dims['width']])):
-            if offset + chunk > vol_dim:
-                QMessageBox.warning(self, "Invalid Dimensions",
-                                    f"The selected chunk exceeds the volume boundaries in dimension {['z', 'y', 'x'][i]}.")
-                return False
-
-        return True
-
     def load_voxel_data(self):
-        if not self.validate_dimensions():
-            return
 
-        volume_id = self.volume_combo.currentText()
-        timestamp = self.timestamp_combo.currentText()
-        offset_dims = [int(self.offset_z.text()), int(self.offset_y.text()), int(self.offset_x.text())]
-        chunk_dims = [int(self.chunk_z.text()), int(self.chunk_y.text()), int(self.chunk_x.text())]
+        volume_id = int(self.scroll_combo.currentText())
+        timestamp = int(self.timestamp_combo.currentText())
+        offset_dims = [int(self.coord_z.text()), int(self.coord_y.text()), int(self.coord_x.text())]
 
         print(f"Loading data for {volume_id}, source timestamp {timestamp}")
         print(f"Offsets: {offset_dims}")
-        print(f"Chunk size: {chunk_dims}")
-
-        #voxel_data = self.volman.chunk(volume_id, timestamp, offset_dims, chunk_dims)
-        #voxel_data = skimage.util.apply_parallel(skimage.measure.block_reduce, voxel_data,
-        #                                         extra_keywords={'block_size': self.downscale_factor.value(),
-        #                                                         'func': np.max})
+        data = common.get_chunk(volume_id, timestamp,offset_dims[0],offset_dims[1],offset_dims[2])
         print("loaded data")
-        #self.voxel_data = preprocessing.global_local_contrast_3d(self.voxel_data)
-        #self.voxel_data = (skimage.exposure.equalize_adapthist(self.voxel_data) * 255).astype(np.uint8)
-        #self.voxel_data = (skimage.restoration.denoise_tv_chambolle(self.voxel_data,weight=0.1)*255).astype(np.uint8)
+        data = numbamath.sumpool(data, (2, 2, 2), (2, 2, 2), (1, 1, 1))
+        data = data.astype(np.float32)
+        data = numbamath.rescale_array(data)
+        data = preprocessing.global_local_contrast_3d(data)
+        data *= 255.
         print("preprocessed data")
-
-        if volume_id == 'Scroll1':
-            #self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll1.zarr', 'r')
-            self.zarray = zarr.open(r'C:\vesuvius_scroll1_downscaled.zarr', 'r')
-
-            myiso = 120
-        elif volume_id == 'Scroll2':
-            self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll2.zarr', 'r')
-            myiso = 128
-        elif volume_id == 'Scroll3':
-            #self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll3_invariant.zarr', 'r')
-            self.zarray = zarr.open(r'C:\vesuvius_scroll3_downscaled.zarr', 'r')
-
-            myiso = 100
-        elif volume_id == 'Scroll4':
-            #self.zarray = zarr.open(r'D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll4.zarr', 'r')
-            self.zarray = zarr.open(r'C:\vesuvius_scroll4_downscaled.zarr', 'r')
-            myiso = 100
-        print("got color data")
-        #color_chunk = self.zarray[offset_dims[1]:offset_dims[1] + chunk_dims[1],
-        #              offset_dims[2]:offset_dims[2] + chunk_dims[2],
-        #              offset_dims[0]:offset_dims[0] + chunk_dims[0]]
-        color_chunk = self.zarray[0:self.zarray.shape[0], 0:self.zarray.shape[1], 0:self.zarray.shape[2]]
-        #color_chunk = skimage.util.apply_parallel(skimage.measure.block_reduce, color_chunk,
-        #                                          extra_keywords={'block_size': self.downscale_factor.value(),
-        #                                                          'func': np.max})
-
-
-        print("transposing color data")
-        color_chunk = np.transpose(color_chunk, (2,0,1))
-        color_chunk = (skimage.util.apply_parallel(skimage.filters.gaussian, color_chunk, extra_keywords={'sigma':2})*255).astype(np.uint8)
-        color_chunk = (skimage.util.apply_parallel(skimage.filters.unsharp_mask, color_chunk,extra_keywords={'radius':1.0,'amount':1.0})*255).astype(np.uint8)
-        print("masking color data")
-
-        print("removing small connected noise")
-        #labels = label(color_chunk > self.iso_value, connectivity=1, return_num=False)
-        #component_sizes = np.bincount(labels.ravel())
-        #mask = np.isin(labels, np.where(component_sizes >= self.noise_size_slider.value())[0])
-        #color_chunk *= mask
-
-
-        #color_chunk[voxel_data < myiso] = 0
-        print("reducing color data")
 
         if self.volume_mapper is None:
             self.setup_vtk_pipeline()
         print("pipeline has been setup")
 
-        self.render_volume(color_chunk)
+        self.render_volume(data)
 
     def render_volume(self, voxel_data):
         image_data = self.numpy_to_vtk(voxel_data)

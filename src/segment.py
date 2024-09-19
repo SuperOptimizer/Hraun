@@ -3,8 +3,9 @@ from numba import jit
 import random
 from snic import snic
 
-from common import timing_decorator, CACHEDIR, download
+from common import timing_decorator, CACHEDIR, get_chunk
 from numbamath import argmaxpool, argminpool, sumpool, avgpool, minpool, maxpool, index_to_offset_3d, rescale_array
+from preprocessing import global_local_contrast_3d
 
 
 @timing_decorator
@@ -166,16 +167,12 @@ def segment(arr):
   print(maxima)
   print(minima)
 
-from preprocessing import global_local_contrast_3d
-
 @timing_decorator
 def main():
-  data = download(
-    "https://dl.ash2txt.org/full-scrolls/Scroll1/PHercParis4.volpkg/volume_grids/20230205180739/cell_yxz_008_008_010.tif")
+  data = get_chunk(1, 20230205180739, 10,8,8)
   data = sumpool(data, (2, 2, 2), (2, 2, 2), (1, 1, 1))
   data = data.astype(np.float32)
   data = rescale_array(data)
-  #data = skimage.exposure.equalize_adapthist(data)
   data = global_local_contrast_3d(data)
   neigh_overflow, labels, superpixels = snic(data, 8, 5.0, 80, 160)
   labels, next_label = merge_all_superpixels(superpixels, labels, 0.8)

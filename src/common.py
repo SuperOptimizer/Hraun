@@ -43,6 +43,8 @@ def download(url):
         tifffile.imwrite(path, data)
     else:
       raise Exception(f'Cannot download {url}')
+  else:
+    print(f"getting {path} from cache")
 
   if url.endswith('.tif'):
       tif = tifffile.imread(path)
@@ -54,3 +56,15 @@ def download(url):
   elif url.endswith('.jpg') or url.endswith('.png'):
     data = np.asarray(Image.open(path))
     return data & 0xf0
+
+def get_chunk(scroll, volume, z, y, x):
+  assert 1 <= scroll <= 4
+  scrolltxt = ['',
+               'Scroll1/PHercParis4.volpkg',
+               'Scroll2/PHercParis3.volpkg',
+               'Scroll3/PHerc332.volpkg',
+               'Scroll4/PHerc1667.volpkg'][scroll]
+
+  url = f"https://dl.ash2txt.org/full-scrolls/{scrolltxt}/volume_grids/{volume}/cell_yxz_{y:03d}_{x:03d}_{z:03d}.tif"
+  chunk = download(url)
+  return chunk

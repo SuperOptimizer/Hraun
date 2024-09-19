@@ -3,6 +3,8 @@ from scipy.optimize import minimize_scalar
 import cv2
 
 from common import timing_decorator
+from src.numbamath import rescale_array
+
 
 #https://github.com/pengyan510/glcae/tree/master
 #this version is modified for 3d grayscale
@@ -49,7 +51,7 @@ def fusion(i):
 @timing_decorator
 def global_local_contrast_3d(x):
     # Convert input to float64
-    x = x.astype(np.float64)
+    x = x.astype(np.float32)
     x_max = np.max(x)
     x_min = np.min(x)
 
@@ -81,9 +83,7 @@ def global_local_contrast_3d(x):
 
     # Handle NaN and infinity values, then rescale back to uint8
     y = np.nan_to_num(y, nan=0, posinf=255, neginf=0)
-    y = np.clip(y, 0, 255).astype(np.uint8)
-
-
-    return y
+    y = np.clip(y, 0, 255)
+    return rescale_array(y.astype(np.float32))
 
 
