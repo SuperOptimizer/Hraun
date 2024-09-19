@@ -32,6 +32,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <stdint.h>
 #include <time.h>
+#include <omp.h>
 
 
 typedef uint8_t u8;
@@ -184,6 +185,7 @@ EXPORT int snic(f32 *img, int lx, int ly, int lz, int d_seed, f32 compactness, f
   // Initialize priority queue with seeds on a grid with step d_seed.
   Heap pq = heap_alloc(img_size*16);
   u32 numk = 0;
+  #pragma omp simd
   for (u16 iz = d_seed/2; iz < lz; iz += d_seed) {
     for (u16 ix = d_seed/2; ix < lx; ix += d_seed) {
       for (u16 iy = d_seed/2; iy < ly; iy += d_seed) {

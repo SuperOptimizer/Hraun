@@ -34,28 +34,26 @@ import os
 import subprocess
 import time
 from functools import wraps
+import numba
+
+from common import timing_decorator, ROOTDIR
+
+SUPERPIXEL_MAX_NEIGHS = 56*2  # Replace with the actual value from your C co cde
 
 
+spec = [
+    ('x', numba.float32),
+    ('y', numba.float32),
+    ('z', numba.float32),
+    ('c', numba.float32),               # a simple scalar field
+    ('n', numba.uint32),               # a simple scalar field
+    ('nlow', numba.uint32),               # a simple scalar field
+    ('nmid', numba.uint32),               # a simple scalar field
+    ('nhig', numba.uint32),
+    ('neighs', numba.uint32[:])
+]
 
-
-
-ROOTDIR = os.path.dirname(os.path.abspath(__file__))
-SUPERPIXEL_MAX_NEIGHS = 56*2  # Replace with the actual value from your C code
-
-
-
-
-def timing_decorator(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start_time = time.perf_counter()
-        result = func(*args, **kwargs)
-        end_time = time.perf_counter()
-        elapsed_time = end_time - start_time
-        print(f"{func.__name__} executed in {elapsed_time:.6f} seconds")
-        return result
-    return wrapper
-
+@numba.experimental.jitclass(spec)
 class Superpixel:
     def __init__(self):
         self.x = 0
@@ -86,10 +84,11 @@ class SuperpixelCType(ctypes.Structure):
 @timing_decorator
 def snic(img, d_seed, compactness, lowmid, midhig):
     if platform.system() == 'Windows':
-        asdf = subprocess.run(r"C:/w64devkit/bin/gcc snic.c -shared -o {}/snic.dll -O3 -g3".format(ROOTDIR).split(),
+        os.makedirs(f"{ROOTDIR}/bin", exist_ok=True)
+        asdf = subprocess.run(r"clang.exe snic.c -shared -o {}/bin/snic.dll -O3 -g3 -march=native -ffast-math -fopenmp".format(ROOTDIR).split(),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print(asdf)
-        snic_lib = ctypes.CDLL(f'{ROOTDIR}/snic.dll')
+        snic_lib = ctypes.CDLL(f'{ROOTDIR}/bin/snic.dll')
     else:
         snic_lib = ctypes.CDLL('path/to/libsnic.so')
 
