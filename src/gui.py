@@ -5,7 +5,7 @@ from PyQt6.QtCore import Qt
 import matplotlib.pyplot as plt
 import vtk
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
-from PyQt6.QtGui import QSurfaceFormat
+from PyQt6.QtGui import QSurfaceFormat, QIntValidator
 from vtkmodules.util import numpy_support
 import numpy as np
 import skimage
@@ -72,26 +72,23 @@ class MainWindow(QMainWindow):
             '4': ['20231107190228']
         }
 
-        self.picked_points = vtk.vtkPoints()
-        self.points_actor = None
-        self.setup_point_picking()
+        #self.picked_points = vtk.vtkPoints()
+        #self.points_actor = None
+        #self.setup_point_picking()
 
         self.setup_control_panel()
 
     def setup_control_panel(self):
-        # Scroll number input
         self.control_layout.addWidget(QLabel("Scroll Number:"))
         self.scroll_combo = QComboBox()
         self.scroll_combo.addItems(['1', '2', '3', '4'])
         self.scroll_combo.currentTextChanged.connect(self.update_timestamp_options)
         self.control_layout.addWidget(self.scroll_combo)
 
-        # Timestamp input
         self.control_layout.addWidget(QLabel("Timestamp:"))
         self.timestamp_combo = QComboBox()
         self.control_layout.addWidget(self.timestamp_combo)
 
-        # Z, Y, X coordinates input
         self.control_layout.addWidget(QLabel("Coordinates (z,y,x):"))
         coord_layout = QHBoxLayout()
         self.coord_z = QLineEdit("9")
@@ -101,12 +98,10 @@ class MainWindow(QMainWindow):
             coord_layout.addWidget(coord)
         self.control_layout.addLayout(coord_layout)
 
-        # Load Data button
         self.load_button = QPushButton("Load Data")
         self.load_button.clicked.connect(self.load_voxel_data)
         self.control_layout.addWidget(self.load_button)
 
-        # Iso Value slider
         self.iso_slider = QSlider(Qt.Orientation.Horizontal)
         self.iso_slider.setRange(0, 255)
         self.iso_slider.setValue(self.iso_value)
@@ -114,8 +109,29 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(QLabel("Iso Value:"))
         self.control_layout.addWidget(self.iso_slider)
 
-        # Initialize timestamp options
+        # New section for Display Segment feature
+        segment_layout = QHBoxLayout()
+        self.segment_input = QLineEdit()
+        self.segment_input.setPlaceholderText("Enter segment ID")
+        self.segment_input.setValidator(QIntValidator())  # Ensure only integers are entered
+        segment_layout.addWidget(self.segment_input)
+
+        self.display_segment_button = QPushButton("Display Segment")
+        self.display_segment_button.clicked.connect(self.display_segment)
+        segment_layout.addWidget(self.display_segment_button)
+
+        self.control_layout.addLayout(segment_layout)
+
         self.update_timestamp_options(self.scroll_combo.currentText())
+
+    def display_segment(self):
+        segment_id = int(self.segment_input.text()) if self.segment_input.text() else None
+        if segment_id is not None:
+            # Call your method here with the segment_id
+            # For example: self.your_display_segment_method(segment_id)
+            print(f"Displaying segment: {segment_id}")  # Placeholder, replace with actual method call
+        else:
+            print("Please enter a valid segment ID")
 
     def update_timestamp_options(self, scroll_number):
         self.timestamp_combo.clear()
@@ -161,6 +177,7 @@ class MainWindow(QMainWindow):
         data = numbamath.rescale_array(data)
         data = preprocessing.global_local_contrast_3d(data)
         data *= 255.
+        self.voxel_data = data
         print("preprocessed data")
 
         if self.volume_mapper is None:
@@ -230,12 +247,6 @@ class MainWindow(QMainWindow):
         vtk_image.GetPointData().SetScalars(vtk_array)
 
         return vtk_image
-
-    def create_grayscale_color_function(self):
-        color_function = vtk.vtkColorTransferFunction()
-        for i in range(256):
-            color_function.AddRGBPoint(i, i / 255.0, i / 255.0, i / 255.0)
-        return color_function
 
     def create_viridis_color_function(self):
         color_function = vtk.vtkColorTransferFunction()
