@@ -2,11 +2,73 @@ import numpy as np
 from numba import jit
 import random
 from snic import snic
+from scipy.spatial import cKDTree
 
 from common import timing_decorator, CACHEDIR, get_chunk
 from numbamath import argmaxpool, argminpool, sumpool, avgpool, minpool, maxpool, index_to_offset_3d, rescale_array
 from preprocessing import global_local_contrast_3d
 
+
+class KDTree3D:
+  def __init__(self):
+    self.points = []
+    self.superpixels = []
+    self.tree = None
+
+  def add_point(self, z, y, x, superpixel):
+    self.points.append([z, y, x])
+    self.superpixels.append(superpixel)
+    self._rebuild_tree()
+
+  @timing_decorator
+  def add_points(self, points, superpixels):
+    self.points.extend(points)
+    self.superpixels.extend(superpixels)
+    self._rebuild_tree()
+
+  @timing_decorator
+  def _rebuild_tree(self):
+    if self.points:
+      self.tree = cKDTree(np.array(self.points))
+    else:
+      self.tree = None
+
+  @timing_decorator
+  def find_nearest_neighbors(self, query_point, k=1, max_distance=50.0):
+    if self.tree is None:
+      return []
+
+    distances, indices = self.tree.query(query_point, k=k, distance_upper_bound=max_distance)
+
+    if k == 1:
+      distances = [distances]
+      indices = [indices]
+
+    results = []
+    for dist, idx in zip(distances, indices):
+      if idx < len(self.points):  # Check if the index is valid
+        results.append((dist, self.points[idx], self.superpixels[idx]))
+
+    return results
+
+  @timing_decorator
+  def find_points_within_radius(self, query_point, radius):
+    if self.tree is None:
+      return []
+
+    indices = self.tree.query_ball_point(query_point, radius)
+    return [(np.linalg.norm(np.array(self.points[i]) - np.array(query_point)),
+             self.points[i],
+             self.superpixels[i]) for i in indices]
+
+
+  def get_all_points_with_superpixels(self):
+    return list(zip(self.points, self.superpixels))
+
+  def clear(self):
+    self.points = []
+    self.superpixels = []
+    self.tree = None
 
 @timing_decorator
 @jit(nopython=True)
@@ -158,14 +220,14 @@ def get_neighbors(labels, num_labels):
 
 
 @timing_decorator
-@jit(nopython=True)
-def segment(arr):
-  maxima, minima = find_seed_points(arr, 1024)
-  labels = walk(arr, maxima)
-  neighbors = get_neighbors(labels, 1024)
-  print(neighbors)
-  print(maxima)
-  print(minima)
+def segment(data):
+  neigh_overflow, labels, superpixels = snic(data, 8, 5.0, 80, 160)
+  tree = KDTree3D()
+  tree.add_points([[sp.x, sp.y, sp.z] for sp in superpixels], superpixels)
+  asdf = tree.find_nearest_neighbors((6.0,11.5,11.2),50)
+  print(asdf)
+  #labels, next_label = merge_all_superpixels(superpixels, labels, 0.8)
+  print()
 
 @timing_decorator
 def main():

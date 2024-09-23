@@ -11,7 +11,7 @@ from functools import wraps
 ROOTDIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),'..'))
 
 if platform.system() == 'Windows':
-  CACHEDIR = "D:/"
+  CACHEDIR = "C:/vesuvius.cache"
 else:
   CACHEDIR = "/mnt/d/"
 

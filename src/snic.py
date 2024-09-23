@@ -82,9 +82,10 @@ class SuperpixelCType(ctypes.Structure):
 def snic(img, d_seed, compactness, lowmid, midhig):
     if platform.system() == 'Windows':
         os.makedirs(f"{ROOTDIR}/bin", exist_ok=True)
-        asdf = subprocess.run(r"clang.exe snic.c -shared -o {}/bin/snic.dll -O3 -g3 -march=native -ffast-math -fopenmp".format(ROOTDIR).split(),
+        if not os.path.exists(f"{ROOTDIR}/bin/snic.dll"):
+            asdf = subprocess.run(r"clang.exe snic.c -shared -o {}/bin/snic.dll -O3 -g3 -march=native -ffast-math -fopenmp".format(ROOTDIR).split(),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(asdf)
+            print(asdf)
         snic_lib = ctypes.CDLL(f'{ROOTDIR}/bin/snic.dll')
     else:
         snic_lib = ctypes.CDLL('path/to/libsnic.so')

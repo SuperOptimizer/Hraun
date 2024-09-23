@@ -10,7 +10,8 @@ from vtkmodules.util import numpy_support
 import numpy as np
 import skimage
 
-import common, preprocessing, numbamath
+import common, preprocessing, numbamath, segment
+from src.common import timing_decorator
 
 
 class CustomQVTKRenderWindowInteractor(QVTKRenderWindowInteractor):
@@ -78,6 +79,7 @@ class MainWindow(QMainWindow):
 
         self.setup_control_panel()
 
+    @timing_decorator
     def setup_control_panel(self):
         self.control_layout.addWidget(QLabel("Scroll Number:"))
         self.scroll_combo = QComboBox()
@@ -109,7 +111,6 @@ class MainWindow(QMainWindow):
         self.control_layout.addWidget(QLabel("Iso Value:"))
         self.control_layout.addWidget(self.iso_slider)
 
-        # New section for Display Segment feature
         segment_layout = QHBoxLayout()
         self.segment_input = QLineEdit()
         self.segment_input.setPlaceholderText("Enter segment ID")
@@ -124,20 +125,100 @@ class MainWindow(QMainWindow):
 
         self.update_timestamp_options(self.scroll_combo.currentText())
 
-    def display_segment(self):
+        self.control_layout.addWidget(QLabel("Remove Connected Components:"))
+
+        small_cc_layout = QHBoxLayout()
+        self.small_size_spinbox = QSpinBox()
+        self.small_size_spinbox.setRange(1, 1000000)
+        self.small_size_spinbox.setValue(10)
+        small_cc_layout.addWidget(QLabel("Remove smaller than:"))
+        small_cc_layout.addWidget(self.small_size_spinbox)
+        self.remove_small_cc_button = QPushButton("Remove Small")
+        self.remove_small_cc_button.clicked.connect(self.remove_small_connected_components)
+        small_cc_layout.addWidget(self.remove_small_cc_button)
+
+        large_cc_layout = QHBoxLayout()
+        self.large_size_spinbox = QSpinBox()
+        self.large_size_spinbox.setRange(1, 10000000)
+        self.large_size_spinbox.setValue(1000)
+        large_cc_layout.addWidget(QLabel("Remove larger than:"))
+        large_cc_layout.addWidget(self.large_size_spinbox)
+        self.remove_large_cc_button = QPushButton("Remove Large")
+        self.remove_large_cc_button.clicked.connect(self.remove_large_connected_components)
+        large_cc_layout.addWidget(self.remove_large_cc_button)
+
+        cc_layout = QVBoxLayout()
+        cc_layout.addLayout(small_cc_layout)
+        cc_layout.addLayout(large_cc_layout)
+        self.control_layout.addLayout(cc_layout)
+
+    @timing_decorator
+    def display_segment(self, *args, **kwargs):
         segment_id = int(self.segment_input.text()) if self.segment_input.text() else None
         if segment_id is not None:
+            print(f"Displaying segment: {segment_id}")  # Placeholder, replace with actual method call
+            segment.segment(self.voxel_data)
             # Call your method here with the segment_id
             # For example: self.your_display_segment_method(segment_id)
-            print(f"Displaying segment: {segment_id}")  # Placeholder, replace with actual method call
         else:
             print("Please enter a valid segment ID")
 
-    def update_timestamp_options(self, scroll_number):
+    @timing_decorator
+    def remove_small_connected_components(self, *args, **kwargs):
+        if self.voxel_data is None:
+            print("No data loaded. Please load data first.")
+            return
+
+        self.remove_connected_components(self.small_size_spinbox.value(), remove_smaller=True)
+
+    @timing_decorator
+    def remove_large_connected_components(self, *args, **kwargs):
+        if self.voxel_data is None:
+            print("No data loaded. Please load data first.")
+            return
+
+        self.remove_connected_components(self.large_size_spinbox.value(), remove_smaller=False)
+
+    @timing_decorator
+    def remove_connected_components(self, size_threshold, remove_smaller=True, *args, **kwargs):
+        # Create a binary mask based on the iso value
+        binary_mask = self.voxel_data > self.iso_value
+
+        # Label connected components
+        labels, num_labels = skimage.measure.label(binary_mask, return_num=True)
+
+        # Count the size of each component
+        component_sizes = np.bincount(labels.ravel())
+
+        # Create a mask for components based on the size threshold
+        if remove_smaller:
+            size_mask = component_sizes >= size_threshold
+        else:
+            size_mask = component_sizes <= size_threshold
+
+        size_mask[0] = True  # Keep the background
+
+        # Apply the mask to the labeled image
+        mask = size_mask[labels]
+
+        # Apply the mask to the voxel data
+        self.voxel_data *= mask
+
+        # Update the visualization
+        self.render_volume(self.voxel_data)
+
+        if remove_smaller:
+            print(f"Removed connected components smaller than {size_threshold} voxels.")
+        else:
+            print(f"Removed connected components larger than {size_threshold} voxels.")
+
+    @timing_decorator
+    def update_timestamp_options(self, scroll_number, *args, **kwargs):
         self.timestamp_combo.clear()
         self.timestamp_combo.addItems(self.scroll_timestamps[scroll_number])
 
-    def setup_vtk_pipeline(self):
+    @timing_decorator
+    def setup_vtk_pipeline(self,  *args, **kwargs):
         self.volume_mapper = vtk.vtkSmartVolumeMapper()
 
         self.volume_property = vtk.vtkVolumeProperty()
@@ -162,7 +243,8 @@ class MainWindow(QMainWindow):
 
         self.renderer.ResetCamera()
 
-    def load_voxel_data(self):
+    @timing_decorator
+    def load_voxel_data(self, *args, **kwargs):
 
         volume_id = int(self.scroll_combo.currentText())
         timestamp = int(self.timestamp_combo.currentText())
@@ -172,9 +254,10 @@ class MainWindow(QMainWindow):
         print(f"Offsets: {offset_dims}")
         data = common.get_chunk(volume_id, timestamp,offset_dims[0],offset_dims[1],offset_dims[2])
         print("loaded data")
-        data = numbamath.sumpool(data, (2, 2, 2), (2, 2, 2), (1, 1, 1))
+        data = numbamath.sumpool(data, (4, 4, 4), (4, 4, 4), (1, 1, 1))
         data = data.astype(np.float32)
         data = numbamath.rescale_array(data)
+        data = skimage.restoration.denoise_tv_chambolle(data,weight=0.1)
         data = preprocessing.global_local_contrast_3d(data)
         data *= 255.
         self.voxel_data = data
@@ -186,7 +269,8 @@ class MainWindow(QMainWindow):
 
         self.render_volume(data)
 
-    def render_volume(self, voxel_data):
+    @timing_decorator
+    def render_volume(self, voxel_data, *args, **kwargs):
         image_data = self.numpy_to_vtk(voxel_data)
         self.volume_mapper.SetInputData(image_data)
 
@@ -201,7 +285,10 @@ class MainWindow(QMainWindow):
         self.renderer.ResetCamera()
         self.vtk_widget.GetRenderWindow().Render()
 
-    def update_opacity_transfer_function(self):
+        self.update_opacity_transfer_function()
+
+    @timing_decorator
+    def update_opacity_transfer_function(self, *args, **kwargs):
         if self.opacity_transfer_function is not None:
             self.opacity_transfer_function.RemoveAllPoints()
 
@@ -219,16 +306,19 @@ class MainWindow(QMainWindow):
             if self.vtk_widget.GetRenderWindow():
                 self.vtk_widget.GetRenderWindow().Render()
 
-    def update_iso_value(self, value):
+    @timing_decorator
+    def update_iso_value(self, value, *args, **kwargs):
         self.iso_value = value
         self.opacity_cap = value
         self.update_opacity_transfer_function()
 
-    def update_opacity_cap(self, value):
+    @timing_decorator
+    def update_opacity_cap(self, value, *args, **kwargs):
         self.opacity_cap = value
         self.update_opacity_transfer_function()
 
-    def numpy_to_vtk(self, numpy_array):
+    @timing_decorator
+    def numpy_to_vtk(self, numpy_array, *args, **kwargs):
         vtk_image = vtk.vtkImageData()
         vtk_image.SetDimensions(numpy_array.shape)
         vtk_image.SetSpacing(1.0, 1.0, 1.0)
@@ -248,7 +338,8 @@ class MainWindow(QMainWindow):
 
         return vtk_image
 
-    def create_viridis_color_function(self):
+    @timing_decorator
+    def create_viridis_color_function(self, *args, **kwargs):
         color_function = vtk.vtkColorTransferFunction()
         cmap = plt.get_cmap("viridis")
         for i in range(256):
@@ -256,7 +347,8 @@ class MainWindow(QMainWindow):
             color_function.AddRGBPoint(i, color[0], color[1], color[2])
         return color_function
 
-    def setup_point_picking(self):
+    @timing_decorator
+    def setup_point_picking(self, *args, **kwargs):
         self.picker = vtk.vtkVolumePicker()
 
         self.points = vtk.vtkPoints()
@@ -277,7 +369,8 @@ class MainWindow(QMainWindow):
         self.interactor.SetPicker(self.picker)
         self.interactor.AddObserver("KeyPressEvent", self.keypress_callback)
 
-    def world_to_voxel(self, world_coords):
+    @timing_decorator
+    def world_to_voxel(self, world_coords, *args, **kwargs):
         vtk_image = self.volume_mapper.GetInput()
         spacing = vtk_image.GetSpacing()
         origin = vtk_image.GetOrigin()
@@ -295,7 +388,8 @@ class MainWindow(QMainWindow):
 
         return voxel_coords
 
-    def keypress_callback(self, obj, event):
+    @timing_decorator
+    def keypress_callback(self, obj, event, *args, **kwargs):
         key = obj.GetKeySym().lower()
         if key == 'p':
             click_pos = self.interactor.GetEventPosition()
@@ -318,6 +412,7 @@ class MainWindow(QMainWindow):
             else:
                 print("No volume picked at this position.")
 
+@timing_decorator
 def guimain():
   app = QApplication(sys.argv)
   window = MainWindow()
