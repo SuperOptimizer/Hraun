@@ -3,10 +3,52 @@ from numba import jit
 import random
 from snic import snic
 from scipy.spatial import cKDTree
+import skimage
+from scipy import ndimage
 
 from common import timing_decorator, CACHEDIR, get_chunk
 from numbamath import argmaxpool, argminpool, sumpool, avgpool, minpool, maxpool, index_to_offset_3d, rescale_array
 from preprocessing import global_local_contrast_3d
+
+
+@timing_decorator
+def analyze_and_process_components(voxel_data, iso_value, n_components, largest=True, remove=False):
+  """
+  Analyze connected components, optionally remove them, and return component information.
+
+  :param voxel_data: 3D numpy array of voxel data
+  :param iso_value: Threshold for creating binary mask
+  :param n_components: Number of components to analyze/remove
+  :param largest: If True, process largest components; if False, process smallest
+  :param remove: If True, remove the selected components from voxel_data
+  :return: Tuple of (component_info, updated_voxel_data)
+  """
+  binary_mask = voxel_data > iso_value
+  labels, num_labels = skimage.measure.label(binary_mask, return_num=True)
+  component_sizes = np.bincount(labels.ravel())
+
+  if largest:
+    selected_components = np.argsort(component_sizes)[-n_components - 1:-1][::-1]
+  else:
+    selected_components = np.argsort(component_sizes)[1:n_components + 1]  # Exclude background (label 0)
+
+  if remove:
+    mask = np.isin(labels, selected_components, invert=True)
+    voxel_data = voxel_data * mask
+    return voxel_data
+  else:
+    component_info = []
+    for label in selected_components:
+      points = np.argwhere(labels == label)
+      size = component_sizes[label]
+      centroid = ndimage.center_of_mass(labels == label)
+      component_info.append({
+        'label': label,
+        'sample_point': tuple(points[0]),
+        'size': size,
+        'centroid': centroid
+      })
+      return component_info
 
 
 class KDTree3D:

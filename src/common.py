@@ -11,9 +11,9 @@ from functools import wraps
 ROOTDIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),'..'))
 
 if platform.system() == 'Windows':
-  CACHEDIR = "C:/vesuvius.cache"
+  CACHEDIR = "c:/vesuvius.cache"
 else:
-  CACHEDIR = "/mnt/d/"
+  CACHEDIR = "/mnt/c/"
 
 
 def timing_decorator(func):
