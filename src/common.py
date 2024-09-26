@@ -57,6 +57,7 @@ def download(url):
     data = np.asarray(Image.open(path))
     return data & 0xf0
 
+@timing_decorator
 def get_chunk(scroll, volume, z, y, x):
   assert 1 <= scroll <= 4
   scrolltxt = ['',

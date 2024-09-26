@@ -5,6 +5,9 @@ from snic import snic
 from scipy.spatial import cKDTree
 import skimage
 from scipy import ndimage
+import numpy as np
+from sklearn.decomposition import PCA
+from scipy.spatial import cKDTree
 
 from common import timing_decorator, CACHEDIR, get_chunk
 from numbamath import argmaxpool, argminpool, sumpool, avgpool, minpool, maxpool, index_to_offset_3d, rescale_array
@@ -12,43 +15,49 @@ from preprocessing import global_local_contrast_3d
 
 
 @timing_decorator
-def analyze_and_process_components(voxel_data, iso_value, n_components, largest=True, remove=False):
-  """
-  Analyze connected components, optionally remove them, and return component information.
+def analyze_and_process_components(voxel_data, iso_value, size_threshold, largest=True, remove=False):
+    """
+    Analyze connected components, optionally remove them, and return component information.
 
-  :param voxel_data: 3D numpy array of voxel data
-  :param iso_value: Threshold for creating binary mask
-  :param n_components: Number of components to analyze/remove
-  :param largest: If True, process largest components; if False, process smallest
-  :param remove: If True, remove the selected components from voxel_data
-  :return: Tuple of (component_info, updated_voxel_data)
-  """
-  binary_mask = voxel_data > iso_value
-  labels, num_labels = skimage.measure.label(binary_mask, return_num=True)
-  component_sizes = np.bincount(labels.ravel())
+    :param voxel_data: 3D numpy array of voxel data
+    :param iso_value: Threshold for creating binary mask
+    :param size_threshold: Size threshold for components to process
+    :param largest: If True, process largest components; if False, process smallest
+    :param remove: If True, remove the selected components from voxel_data
+    :return: If remove is True, return updated voxel_data. Otherwise, return component_info
+    """
+    binary_mask = voxel_data > iso_value
+    labels, num_labels = skimage.measure.label(binary_mask, return_num=True)
+    component_sizes = np.bincount(labels.ravel())
 
-  if largest:
-    selected_components = np.argsort(component_sizes)[-n_components - 1:-1][::-1]
-  else:
-    selected_components = np.argsort(component_sizes)[1:n_components + 1]  # Exclude background (label 0)
+    # Select components based on size threshold
+    if largest:
+        selected_components = np.where(component_sizes > size_threshold)[0]
+    else:
+        selected_components = np.where((component_sizes <= size_threshold) & (component_sizes > 0))[0]
 
-  if remove:
-    mask = np.isin(labels, selected_components, invert=True)
-    voxel_data = voxel_data * mask
-    return voxel_data
-  else:
-    component_info = []
-    for label in selected_components:
-      points = np.argwhere(labels == label)
-      size = component_sizes[label]
-      centroid = ndimage.center_of_mass(labels == label)
-      component_info.append({
-        'label': label,
-        'sample_point': tuple(points[0]),
-        'size': size,
-        'centroid': centroid
-      })
-      return component_info
+    if remove:
+        if largest:
+            # Remove large components
+            mask = np.isin(labels, selected_components, invert=True)
+        else:
+            # Remove small components
+            mask = np.isin(labels, selected_components, invert=True)
+        voxel_data = voxel_data * mask
+        return voxel_data
+    else:
+        component_info = []
+        for label in selected_components:
+            points = np.argwhere(labels == label)
+            size = component_sizes[label]
+            centroid = ndimage.center_of_mass(labels == label)
+            component_info.append({
+                'label': label,
+                'sample_point': tuple(points[0]),
+                'size': size,
+                'centroid': centroid
+            })
+        return component_info
 
 
 class KDTree3D:
@@ -112,162 +121,71 @@ class KDTree3D:
     self.superpixels = []
     self.tree = None
 
-@timing_decorator
-@jit(nopython=True)
-def find_seed_points(arr, nseeds):
-  maxiter = 10
 
-  maxes = argmaxpool(arr, (3, 3, 3), (1, 1, 1), (1, 1, 1))
-  maxima = set()
-  for seed in range(nseeds):
-    z, y, x = (random.randint(0, arr.shape[0] - 1),
-               random.randint(0, arr.shape[1] - 1),
-               random.randint(0, arr.shape[2] - 1))
-    for i in range(maxiter):
-      offset = index_to_offset_3d(maxes[z, y, x], (3, 3, 3))
-      if offset[0] == 0 and offset[1] == 0 and offset[2] == 0:
-        maxima.add((z, y, x))
-        break
-      z += offset[0]
-      y += offset[1]
-      x += offset[2]
+@timing_decorator
+def find_superpixel_seeds(superpixels, nseeds):
+  return reversed(sorted(superpixels, key= lambda x: x.c))[:nseeds]
+
+@timing_decorator
+def greedy_walk(superpixels, iso):
+  nextlabel = 1
+  label = 0
+  sp_to_segment = dict()
+  for i,sp in enumerate(superpixels):
+    if sp in sp_to_segment:
+      continue
+    if sp.c > iso:
+      label = nextlabel
+      if label >= 256:
+        raise Exception("cant label more than 256 within one chunk")
+      nextlabel+=1
     else:
-      maxima.add((z, y, x))
+      sp_to_segment[i] = 0
+    to_be_processed = [i]
+    while len(to_be_processed) > 0:
+      cur = to_be_processed.pop()
+      if superpixels[cur].c < iso:
+        sp_to_segment[cur] = 0
+      else:
+        sp_to_segment[cur] = label
+      for n in superpixels[cur].neighs:
+        if n == 0:
+          break
+        if n not in to_be_processed and n not in sp_to_segment:
+          to_be_processed.append(n)
+  return sp_to_segment
 
-  mins = argminpool(arr, (3, 3, 3), (1, 1, 1), (1, 1, 1))
-  minima = set()
-  for seed in range(nseeds):
-    z, y, x = (random.randint(0, arr.shape[0] - 1),
-               random.randint(0, arr.shape[1] - 1),
-               random.randint(0, arr.shape[2] - 1))
-    for i in range(maxiter):
-      offset = index_to_offset_3d(mins[z, y, x], (3, 3, 3))
-      if offset[0] == 0 and offset[1] == 0 and offset[2] == 0:
-        minima.add((z, y, x))
-        break
-      z += offset[0]
-      y += offset[1]
-      x += offset[2]
-    else:
-      minima.add((z, y, x))
-  return maxima, minima
-
-
-@timing_decorator
-@jit(nopython=True)
-def walk(arr, seeds):
-  labels = np.zeros(arr.shape, dtype=np.uint16)
-  max_iter = 10
-  for label, seed in enumerate(seeds):
-    z, y, x = seed
-    for i in range(max_iter):
-      tries = 0
-      nextval = 0.0
-      candidates = []
-      while tries < 10:
-        tries += 1
-        for zi in range(-1, 2):
-          for yi in range(-1, 2):
-            for xi in range(-1, 2):
-              if zi == yi == xi == 0:
-                continue
-              if (z + zi < 0 or z + zi >= arr.shape[0] or
-                  y + yi < 0 or y + yi >= arr.shape[1] or
-                  x + xi < 0 or x + xi >= arr.shape[2]):
-                continue
-              if (arr[z + zi, y + yi, x + xi] > nextval and
-                  labels[z + zi, y + yi, x + xi] == 0):
-                candidates.insert(0,(z + zi, y + yi, x + xi))
-                nextval = arr[z + zi, y + yi, x + xi]
-        if len(candidates) == 0:
-          print()
-
-      assert len(candidates)> 0
-      z, y, x = candidates[0]
-      labels[z, y, x] = label
-  return labels
-
-
-@timing_decorator
-@jit(nopython=True)
-def merge_all_superpixels(superpixels, labels, iso):
-    num_superpixels = len(superpixels)
-    sp_to_segment = np.zeros(num_superpixels, dtype=np.int32)
-
-    for i in range(num_superpixels):
-        if superpixels[i].c >= iso:
-            sp_to_segment[i] = i + 1
-        else:
-            sp_to_segment[i] = 0
-
-    changed = True
-    while changed:
-        changed = False
-        for i in range(num_superpixels):
-            if sp_to_segment[i] > 0:
-                min_label = sp_to_segment[i]
-                for n in superpixels[i].neighs:
-                    if n == 0:
-                        break
-                    if sp_to_segment[n] > 0:
-                        min_label = min(min_label, sp_to_segment[n])
-                if min_label < sp_to_segment[i]:
-                    sp_to_segment[i] = min_label
-                    changed = True
-
-    final_labels = np.zeros(num_superpixels, dtype=np.int32)
-    next_label = 1
-    for i in range(num_superpixels):
-        if sp_to_segment[i] > 0:
-            if final_labels[sp_to_segment[i] - 1] == 0:
-                final_labels[sp_to_segment[i] - 1] = next_label
-                next_label += 1
-            sp_to_segment[i] = final_labels[sp_to_segment[i] - 1]
-
-    new_labels = np.zeros_like(labels)
-    for i in range(labels.shape[0]):
-        for j in range(labels.shape[1]):
-            for k in range(labels.shape[2]):
-                new_labels[i, j, k] = sp_to_segment[labels[i, j, k]]
-
-    return new_labels, next_label - 1
-
-
-
-@timing_decorator
-@jit(nopython=True)
-def get_neighbors(labels, num_labels):
-  neighbors = np.zeros((num_labels, num_labels), dtype=np.uint16)
-  num_neighbors = np.zeros((num_labels,), dtype=np.uint16)
+#@jit(nopython=True)
+def label_voxel_data(superpixels, sp_to_segment, labels):
+  ret = np.zeros_like(labels,dtype=np.uint8)
   for z in range(labels.shape[0]):
     for y in range(labels.shape[1]):
       for x in range(labels.shape[2]):
-        l = labels[z, y, x]
-        if l == 0:
-          continue
-        for zi in range(-1, 2):
-          for yi in range(-1, 2):
-            for xi in range(-1, 2):
-              if zi == 0 and yi == 0 and xi == 0:
-                continue
-              if (z + zi < 0 or z + zi >= labels.shape[0] or
-                  y + yi < 0 or y + yi >= labels.shape[1] or
-                  x + xi < 0 or x + xi >= labels.shape[2]):
-                continue
-              if (labels[z + zi, y + yi, x + xi] > 0 and
-                  labels[z + zi, y + yi, x + xi] != l):
-                neighbors[l][num_neighbors[l]] = labels[z + zi, y + yi, x + xi]
-                num_neighbors[l] += 1
-  return neighbors
+        l = labels[z,y,x]
+        v = sp_to_segment[l]
+
+        ret[z,y,x] = v
+  return ret
+
 
 
 @timing_decorator
-def segment(data):
+def segment(data, iso):
+  if any([data.shape[0] > 256,data.shape[1] > 256 ,data.shape[2] > 256]):
+    raise ValueError("can only do snic segmentation on regions of less than or equal to 256x256x256")
   neigh_overflow, labels, superpixels = snic(data, 8, 5.0, 80, 160)
-  tree = KDTree3D()
-  tree.add_points([[sp.x, sp.y, sp.z] for sp in superpixels], superpixels)
-  asdf = tree.find_nearest_neighbors((6.0,11.5,11.2),50)
-  print(asdf)
+  sp_to_segment = greedy_walk(superpixels, iso)
+  sp_to_segment_numpy = np.zeros(len(superpixels),dtype=np.uint8)
+  for sp,label in sp_to_segment.items():
+    sp_to_segment_numpy[sp] = label
+  data = label_voxel_data(superpixels, sp_to_segment_numpy, labels)
+
+  return data
+  #find_superpixel_seeds(superpixels, 100)
+  #tree = KDTree3D()
+  #tree.add_points([[sp.x, sp.y, sp.z] for sp in superpixels], superpixels)
+  #asdf = tree.find_nearest_neighbors((6.0,11.5,11.2),50)
+  #print(asdf)
   #labels, next_label = merge_all_superpixels(superpixels, labels, 0.8)
   print()
 

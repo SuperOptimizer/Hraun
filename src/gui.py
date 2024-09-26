@@ -67,6 +67,7 @@ class MainWindow(QMainWindow):
     self.volume_property = None
     self.color_transfer_function = None
     self.opacity_transfer_function = None
+    self.segments = None
 
     self.scroll_timestamps = {
       '1': ['20230205180739', '20230206171837'],
@@ -132,14 +133,14 @@ class MainWindow(QMainWindow):
     # Small components removal layout
     small_cc_layout = QHBoxLayout()
     self.small_size_spinbox = QSpinBox()
-    self.small_size_spinbox.setRange(1, 1000000)
+    self.small_size_spinbox.setRange(1, 1000)
     self.small_size_spinbox.setValue(10)
     small_cc_layout.addWidget(QLabel("Remove smaller:"))
     small_cc_layout.addWidget(self.small_size_spinbox)
 
     self.small_count_spinbox = QSpinBox()
-    self.small_count_spinbox.setRange(1, 1000000)
-    self.small_count_spinbox.setValue(1000000)
+    self.small_count_spinbox.setRange(1, 1000)
+    self.small_count_spinbox.setValue(10)
     small_cc_layout.addWidget(QLabel("Regions:"))
     small_cc_layout.addWidget(self.small_count_spinbox)
 
@@ -174,12 +175,18 @@ class MainWindow(QMainWindow):
   def display_segment(self, *args, **kwargs):
     segment_id = int(self.segment_input.text()) if self.segment_input.text() else None
     if segment_id is not None:
-      print(f"Displaying segment: {segment_id}")  # Placeholder, replace with actual method call
-      segment.segment(self.voxel_data)
-      # Call your method here with the segment_id
-      # For example: self.your_display_segment_method(segment_id)
+      print(f"Displaying segment: {segment_id}")
+      data = segment.segment(self.voxel_data, self.iso_value)
+
+
+      if self.volume_mapper is None:
+        self.setup_vtk_pipeline()
+
+      self.render_volume(data)
     else:
       print("Please enter a valid segment ID")
+
+
 
 
   def remove_largest_components(self):
@@ -235,19 +242,21 @@ class MainWindow(QMainWindow):
     print(f"Offsets: {offset_dims}")
     data = common.get_chunk(volume_id, timestamp, offset_dims[0], offset_dims[1], offset_dims[2])
     print("loaded data")
-    #data = numbamath.sumpool(data, (2, 2, 2), (2, 2, 2), (1, 1, 1))
-    data = data[0:257,0:257,0:257]
+    data = numbamath.sumpool(data, (4, 4, 4), (4, 4, 4), (1, 1, 1))
+    #data = data[0:256,0:256,0:256]
     data = data.astype(np.float32)
     data = numbamath.rescale_array(data)
-    data = skimage.restoration.denoise_tv_chambolle(data, weight=0.2)
+    data = skimage.restoration.denoise_tv_chambolle(data, weight=.1)
     data = preprocessing.global_local_contrast_3d(data)
+    data = skimage.exposure.equalize_adapthist(data,nbins=16)
     data *= 255.
+    data = data.astype(np.uint8)
+    data = data.astype(np.float32)
     self.voxel_data = data
     print("preprocessed data")
 
     if self.volume_mapper is None:
       self.setup_vtk_pipeline()
-    print("pipeline has been setup")
 
     self.render_volume(data)
 
