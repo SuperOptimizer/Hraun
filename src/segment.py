@@ -254,31 +254,20 @@ def superpixel_flow(superpixels: snic.Superpixel, labels, seeds, nsteps, iso):
     else:
       seg_to_sp[seg] = set()
       seg_to_sp[seg].add(sp)
-  return list(seg_to_sp.values())
+  return list(reversed(sorted(seg_to_sp.values(), key= lambda x: len(x))))
 
 
 @timing_decorator
 def segment(data):
-  tree = KDTree3D()
-  tree.add_points([[sp.x, sp.y, sp.z] for sp in superpixels], superpixels)
-  asdf = tree.find_nearest_neighbors((6.0,11.5,11.2),50)
-  print(asdf)
-  #labels, next_label = merge_all_superpixels(superpixels, labels, 0.8)
-  print()
-
-  return data
-  #find_superpixel_seeds(superpixels, 100)
-  #tree = KDTree3D()
-  #tree.add_points([[sp.x, sp.y, sp.z] for sp in superpixels], superpixels)
-  #asdf = tree.find_nearest_neighbors((6.0,11.5,11.2),50)
-  #print(asdf)
-  #labels, next_label = merge_all_superpixels(superpixels, labels, 0.8)
-  print()
+  neigh_overflow, labels, superpixels = snic.snic(data, 8, 10.0, 80, 160)
+  seeds = get_superpixel_seeds(superpixels, len(superpixels) // 1000)
+  segments = superpixel_flow(superpixels, labels, seeds, 10, 0.5)
+  return superpixels, labels, segments
 
 @timing_decorator
 def main():
   data = get_chunk(1, 20230205180739, 10,8,8)
-  data = sumpool(data, (2, 2, 2), (2, 2, 2), (1, 1, 1))
+  data = sumpool(data, (4, 4, 4), (4, 4, 4), (1, 1, 1))
   data = data.astype(np.float32)
   data = rescale_array(data)
   data = global_local_contrast_3d(data)

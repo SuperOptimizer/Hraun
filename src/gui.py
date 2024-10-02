@@ -103,6 +103,14 @@ class MainWindow(QMainWindow):
       coord_layout.addWidget(coord)
     self.control_layout.addLayout(coord_layout)
 
+    downscale_layout = QHBoxLayout()
+    downscale_layout.addWidget(QLabel("Downscale Factor:"))
+    self.downscale_spinbox = QSpinBox()
+    self.downscale_spinbox.setRange(1, 8)
+    self.downscale_spinbox.setValue(1)
+    downscale_layout.addWidget(self.downscale_spinbox)
+    self.control_layout.addLayout(downscale_layout)
+
     self.load_button = QPushButton("Load Data")
     self.load_button.clicked.connect(self.load_voxel_data)
     self.control_layout.addWidget(self.load_button)
@@ -181,7 +189,7 @@ class MainWindow(QMainWindow):
       mask = data < self.iso_value
       data[mask] = 0
 
-      data = segment.segment(data)
+      superpixels, labels, segments = segment.segment(data)
 
 
       if self.volume_mapper is None:
@@ -242,12 +250,17 @@ class MainWindow(QMainWindow):
     volume_id = int(self.scroll_combo.currentText())
     timestamp = int(self.timestamp_combo.currentText())
     offset_dims = [int(self.coord_z.text()), int(self.coord_y.text()), int(self.coord_x.text())]
+    downscale_factor = self.downscale_spinbox.value()
 
     print(f"Loading data for {volume_id}, source timestamp {timestamp}")
     print(f"Offsets: {offset_dims}")
     data = common.get_chunk(volume_id, timestamp, offset_dims[0], offset_dims[1], offset_dims[2])
     print("loaded data")
-    data = numbamath.sumpool(data, (4, 4, 4), (4, 4, 4), (1, 1, 1))
+
+    if downscale_factor > 1:
+      data = numbamath.sumpool(data,
+                               (downscale_factor, downscale_factor, downscale_factor),
+                               (downscale_factor, downscale_factor, downscale_factor), (1, 1, 1))
     #data = data[0:256,0:256,0:256]
     data = data.astype(np.float32)
     data = numbamath.rescale_array(data)
