@@ -1,4 +1,5 @@
 import numpy as np
+from networkx.classes import neighbors
 from numba import jit
 import random
 from snic import snic
@@ -8,10 +9,13 @@ from scipy import ndimage
 import numpy as np
 from sklearn.decomposition import PCA
 from scipy.spatial import cKDTree
+import collections
+import copy
 
 from common import timing_decorator, CACHEDIR, get_chunk
 from numbamath import argmaxpool, argminpool, sumpool, avgpool, minpool, maxpool, index_to_offset_3d, rescale_array
 from preprocessing import global_local_contrast_3d
+import snic
 
 
 @timing_decorator
@@ -122,63 +126,145 @@ class KDTree3D:
     self.tree = None
 
 
-@timing_decorator
-def find_superpixel_seeds(superpixels, nseeds):
-  return reversed(sorted(superpixels, key= lambda x: x.c))[:nseeds]
+def get_superpixel_seeds(superpixels, nseeds):
+  return list(reversed(sorted(superpixels, key=lambda x: x.c)))[:nseeds]
+
 
 @timing_decorator
-def greedy_walk(superpixels, iso):
-  nextlabel = 1
-  label = 0
-  sp_to_segment = dict()
-  for i,sp in enumerate(superpixels):
-    if sp in sp_to_segment:
-      continue
-    if sp.c > iso:
-      label = nextlabel
-      if label >= 256:
-        raise Exception("cant label more than 256 within one chunk")
-      nextlabel+=1
+def merge_all_superpixels(superpixels, labels, iso):
+    num_superpixels = len(superpixels)
+    sp_to_segment = np.zeros(num_superpixels, dtype=np.int32)
+
+    for i in range(num_superpixels):
+        if superpixels[i].c >= iso:
+            sp_to_segment[i] = i + 1
+        else:
+            sp_to_segment[i] = 0
+
+    changed = True
+    while changed:
+        changed = False
+        for i in range(num_superpixels):
+            if sp_to_segment[i] > 0:
+                min_label = sp_to_segment[i]
+                for n in superpixels[i].neighs:
+                    if n == 0:
+                        break
+                    if sp_to_segment[n] > 0:
+                        min_label = min(min_label, sp_to_segment[n])
+                if min_label < sp_to_segment[i]:
+                    sp_to_segment[i] = min_label
+                    changed = True
+
+    final_labels = np.zeros(num_superpixels, dtype=np.int32)
+    next_label = 1
+    for i in range(num_superpixels):
+        if sp_to_segment[i] > 0:
+            if final_labels[sp_to_segment[i] - 1] == 0:
+                final_labels[sp_to_segment[i] - 1] = next_label
+                next_label += 1
+            sp_to_segment[i] = final_labels[sp_to_segment[i] - 1]
+
+    new_labels = np.zeros_like(labels)
+    for i in range(labels.shape[0]):
+        for j in range(labels.shape[1]):
+            for k in range(labels.shape[2]):
+                new_labels[i, j, k] = sp_to_segment[labels[i, j, k]]
+
+    return new_labels, next_label - 1
+
+@timing_decorator
+def get_flow_order(superpixels, seeds):
+  order = []
+  to_process = copy.copy(seeds)
+  to_process_set = set(to_process)
+
+  processed = set()
+  sp_to_candidates = dict()
+
+  for sp in superpixels:
+    candidates = list(reversed(sorted(sp.neighs, key=lambda x: x.c)))
+    sp_to_candidates[sp] = candidates
+
+  while len(to_process) > 0:
+    sp = to_process.pop(0)
+    to_process_set.remove(sp)
+    candidates = sp_to_candidates[sp]
+    for n in candidates:
+      if n in processed or n in to_process_set:
+        continue
+      to_process.append(sp)
+      to_process.append(n)
+      to_process_set.add(sp)
+      to_process_set.add(n)
+      break
     else:
-      sp_to_segment[i] = 0
-    to_be_processed = [i]
-    while len(to_be_processed) > 0:
-      cur = to_be_processed.pop()
-      if superpixels[cur].c < iso:
-        sp_to_segment[cur] = 0
-      else:
-        sp_to_segment[cur] = label
-      for n in superpixels[cur].neighs:
-        if n == 0:
-          break
-        if n not in to_be_processed and n not in sp_to_segment:
-          to_be_processed.append(n)
-  return sp_to_segment
+      processed.add(sp)
+    order.append(sp)
+  new_order = []
+  new_order_set = set()
+  for sp in order:
+    if sp not in new_order_set:
+      new_order.append(sp)
+      new_order_set.add(sp)
+  return new_order
 
-#@jit(nopython=True)
-def label_voxel_data(superpixels, sp_to_segment, labels):
-  ret = np.zeros_like(labels,dtype=np.uint8)
-  for z in range(labels.shape[0]):
-    for y in range(labels.shape[1]):
-      for x in range(labels.shape[2]):
-        l = labels[z,y,x]
-        v = sp_to_segment[l]
+@timing_decorator
+def superpixel_flow(superpixels: snic.Superpixel, labels, seeds, nsteps, iso):
+  segments = dict()
+  to_process = list()
+  for seed in seeds:
+    to_process.append(seed)
+  order = get_flow_order(superpixels, seeds)
+  label = 1
+  for sp in order:
+    assert sp not in segments
+    #if >= 1 neighbors belong to exactly one segment, the sp joins that segment
+    #if exactly zero neighbors are in a segment, then this superpixel becomes a new segment
+    #if more than one neighbor belongs to more than one segment, ???
+    # should we merge the segments?
+    possible_segments = list()
+    if sp.c < iso:
+      segments[sp] = 0
+      continue
+    for n in sp.neighs:
+      if s := segments.get(n):
+        possible_segments.append(s)
+    if len(possible_segments) == 0:
+      segments[sp] = label
+      label +=1
+    elif len(set(possible_segments)) == 1:
+      #we can get duplicate possible segments which we may need to determine boundaries
+      #so remove duplicates for this check
+      segments[sp] = possible_segments[0]
+    else:
+      l = 0
+      count = 0
+      for s in set(possible_segments):
+        c = possible_segments.count(s)
+        if c > count:
+          count = c
+          l = s
+      segments[sp] = l
 
-        ret[z,y,x] = v
-  return ret
-
+  seg_to_sp = dict()
+  for sp, seg in segments.items():
+    if seg in seg_to_sp:
+      seg_to_sp[seg].add(sp)
+    else:
+      seg_to_sp[seg] = set()
+      seg_to_sp[seg].add(sp)
+  return list(seg_to_sp.values())
 
 
 @timing_decorator
-def segment(data, iso):
-  if any([data.shape[0] > 256,data.shape[1] > 256 ,data.shape[2] > 256]):
-    raise ValueError("can only do snic segmentation on regions of less than or equal to 256x256x256")
-  neigh_overflow, labels, superpixels = snic(data, 8, 5.0, 80, 160)
-  sp_to_segment = greedy_walk(superpixels, iso)
-  sp_to_segment_numpy = np.zeros(len(superpixels),dtype=np.uint8)
-  for sp,label in sp_to_segment.items():
-    sp_to_segment_numpy[sp] = label
-  data = label_voxel_data(superpixels, sp_to_segment_numpy, labels)
+def segment(data):
+  tree = KDTree3D()
+  tree.add_points([[sp.x, sp.y, sp.z] for sp in superpixels], superpixels)
+  asdf = tree.find_nearest_neighbors((6.0,11.5,11.2),50)
+  print(asdf)
+  #labels, next_label = merge_all_superpixels(superpixels, labels, 0.8)
+  print()
 
   return data
   #find_superpixel_seeds(superpixels, 100)
@@ -196,10 +282,15 @@ def main():
   data = data.astype(np.float32)
   data = rescale_array(data)
   data = global_local_contrast_3d(data)
-  neigh_overflow, labels, superpixels = snic(data, 8, 5.0, 80, 160)
-  labels, next_label = merge_all_superpixels(superpixels, labels, 0.8)
-  print()
-  #segment(data)
+  data = skimage.exposure.equalize_adapthist(data, nbins=16)
+  neigh_overflow, labels, superpixels = snic.snic(data, 8, 10.0, 80, 160)
+  seeds = get_superpixel_seeds(superpixels, len(superpixels)//1000)
+  segments = superpixel_flow(superpixels, labels, seeds, 10, 0.5)
+  print(segments)
+  print(seeds)
+  print(neigh_overflow)
+  print(labels)
+  print(superpixels)
 
 
 if __name__ == "__main__":

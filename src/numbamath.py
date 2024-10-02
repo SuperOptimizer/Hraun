@@ -47,7 +47,6 @@ def calculate_distance_from_center(kd, kh, kw, kernel_d, kernel_h, kernel_w):
   return abs(kd - center_d) + abs(kh - center_h) + abs(kw - center_w)
 
 
-@timing_decorator
 @jit(nopython=True)
 def avgpool(input_array, kernel_size, stride, dilation):
   depth, height, width = input_array.shape
@@ -89,7 +88,6 @@ def avgpool(input_array, kernel_size, stride, dilation):
         output[d, h, w] = pool_sum / pool_count if pool_count > 0 else 0.0
   return output
 
-@timing_decorator
 @jit(nopython=True)
 def maxpool(input_array, kernel_size, stride, dilation):
   depth, height, width = input_array.shape
@@ -130,7 +128,6 @@ def maxpool(input_array, kernel_size, stride, dilation):
         output[d, h, w] = pool_max if pool_max != -np.inf else 0.0
   return output
 
-@timing_decorator
 @jit(nopython=True)
 def minpool(input_array, kernel_size, stride, dilation):
   depth, height, width = input_array.shape
@@ -171,7 +168,6 @@ def minpool(input_array, kernel_size, stride, dilation):
 
   return output
 
-@timing_decorator
 @jit(nopython=True)
 def sumpool(input_array, kernel_size, stride, dilation):
   depth, height, width = input_array.shape
@@ -216,7 +212,6 @@ def sumpool(input_array, kernel_size, stride, dilation):
         output[d, h, w] = pool_sum
   return output
 
-@timing_decorator
 @jit(nopython=True)
 def argmaxpool(input_array, kernel_size, stride, dilation):
   depth, height, width = input_array.shape
@@ -264,7 +259,6 @@ def argmaxpool(input_array, kernel_size, stride, dilation):
         output[d, h, w] = max_index
   return output
 
-@timing_decorator
 @jit(nopython=True)
 def argminpool(input_array, kernel_size, stride, dilation):
   depth, height, width = input_array.shape

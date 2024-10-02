@@ -47,21 +47,23 @@ spec = [
     ('nlow', numba.uint32),               # a simple scalar field
     ('nmid', numba.uint32),               # a simple scalar field
     ('nhig', numba.uint32),
-    ('neighs', numba.uint32[:])
+    ('neighs', numba.uint32[:]),
+    ('label', numba.uint32)
 ]
 
-@numba.experimental.jitclass(spec)
+#@numba.experimental.jitclass(spec)
 class Superpixel:
-    def __init__(self):
-        self.x = 0
-        self.y = 0
-        self.z = 0
-        self.c = 0
-        self.n = 0
-        self.nlow = 0
-        self.nmid = 0
-        self.nhig = 0
-        self.neighs = np.zeros(SUPERPIXEL_MAX_NEIGHS, dtype=np.uint32)
+    def __init__(self, x,y,z,c,n,nlow,nmid,nhigh,neighs,label):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.c = c
+        self.n = n
+        self.nlow = nlow
+        self.nmid = nmid
+        self.nhig = nhigh
+        self.neighs = neighs
+        self.label = label
 
 # Define the Superpixel structure
 class SuperpixelCType(ctypes.Structure):
@@ -141,17 +143,26 @@ def snic(img, d_seed, compactness, lowmid, midhig):
     )
 
     superpixels = []
-    for i in range(superpixels_count + 1):
-        sp = Superpixel()
-        sp.x = superpixels_ctype[i].x
-        sp.y = superpixels_ctype[i].y
-        sp.z = superpixels_ctype[i].z
-        sp.c = superpixels_ctype[i].c
-        sp.n = superpixels_ctype[i].n
-        sp.nlow = superpixels_ctype[i].nlow
-        sp.nmid = superpixels_ctype[i].nmid
-        sp.nhig = superpixels_ctype[i].nhig
-        sp.neighs = np.ctypeslib.as_array(superpixels_ctype[i].neighs, shape=(SUPERPIXEL_MAX_NEIGHS,))
+
+    for i in range(superpixels_count+1):
+        x = superpixels_ctype[i].x
+        y = superpixels_ctype[i].y
+        z = superpixels_ctype[i].z
+        c = superpixels_ctype[i].c
+        n = superpixels_ctype[i].n
+        nlow = superpixels_ctype[i].nlow
+        nmid = superpixels_ctype[i].nmid
+        nhigh = superpixels_ctype[i].nhig
+        label = i
+        sp = Superpixel(x,y,z,c,n,nlow,nmid,nhigh,set(),label)
         superpixels.append(sp)
+
+    #fixup neighbors now since we wouldnt while creating the array because we needed future superpixels
+    #that exist now
+    for sp in superpixels:
+        for n in superpixels_ctype[sp.label].neighs:
+            if n == 0:
+                break
+            sp.neighs.add(superpixels[n])
 
     return neigh_overflow, labels, superpixels

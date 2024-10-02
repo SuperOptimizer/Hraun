@@ -133,13 +133,13 @@ class MainWindow(QMainWindow):
     # Small components removal layout
     small_cc_layout = QHBoxLayout()
     self.small_size_spinbox = QSpinBox()
-    self.small_size_spinbox.setRange(1, 1000)
+    self.small_size_spinbox.setRange(1, 10000)
     self.small_size_spinbox.setValue(10)
     small_cc_layout.addWidget(QLabel("Remove smaller:"))
     small_cc_layout.addWidget(self.small_size_spinbox)
 
     self.small_count_spinbox = QSpinBox()
-    self.small_count_spinbox.setRange(1, 1000)
+    self.small_count_spinbox.setRange(1, 10000)
     self.small_count_spinbox.setValue(10)
     small_cc_layout.addWidget(QLabel("Regions:"))
     small_cc_layout.addWidget(self.small_count_spinbox)
@@ -176,7 +176,12 @@ class MainWindow(QMainWindow):
     segment_id = int(self.segment_input.text()) if self.segment_input.text() else None
     if segment_id is not None:
       print(f"Displaying segment: {segment_id}")
-      data = segment.segment(self.voxel_data, self.iso_value)
+
+      data = self.voxel_data
+      mask = data < self.iso_value
+      data[mask] = 0
+
+      data = segment.segment(data)
 
 
       if self.volume_mapper is None:
