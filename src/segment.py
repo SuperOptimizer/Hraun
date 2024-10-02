@@ -258,10 +258,29 @@ def superpixel_flow(superpixels: snic.Superpixel, labels, seeds, nsteps, iso):
 
 
 @timing_decorator
-def segment(data):
+def label_data(data, labels, segment):
+  ret = np.zeros_like(data)
+  segment_labels = set([sp.label for sp in segment])
+
+  for z in range(data.shape[0]):
+    for y in range(data.shape[1]):
+      for x in range(data.shape[2]):
+        if labels[z, y, x] in segment_labels:
+          ret[z, y, x] = data[z, y, x]
+
+  return ret
+
+
+
+@timing_decorator
+def segment(data, iso):
+  #we dont know how data is scaled so just rescale to 0 - 1
+  data = rescale_array(data)
+  if iso > 1:
+    iso = iso / 256
   neigh_overflow, labels, superpixels = snic.snic(data, 8, 10.0, 80, 160)
   seeds = get_superpixel_seeds(superpixels, len(superpixels) // 1000)
-  segments = superpixel_flow(superpixels, labels, seeds, 10, 0.5)
+  segments = superpixel_flow(superpixels, labels, seeds, 10, iso)
   return superpixels, labels, segments
 
 @timing_decorator

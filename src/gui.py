@@ -188,8 +188,8 @@ class MainWindow(QMainWindow):
       data = self.voxel_data
       mask = data < self.iso_value
       data[mask] = 0
-
-      superpixels, labels, segments = segment.segment(data)
+      superpixels, labels, segments = segment.segment(data, self.iso_value)
+      data = segment.label_data(data,labels,segments[segment_id])
 
 
       if self.volume_mapper is None:
