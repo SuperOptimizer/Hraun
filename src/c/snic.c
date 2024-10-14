@@ -87,7 +87,7 @@ static void heap_free(Heap *heap) {
 }
 
 static void heap_push(Heap *heap, HeapNode node) {
-  assert(heap->len <= heap->size);
+  //assert(heap->len <= heap->size);
 
   heap->len++;
   heap->nodes[heap->len] = node;
@@ -98,7 +98,7 @@ static void heap_push(Heap *heap, HeapNode node) {
 }
 
 static HeapNode heap_pop(Heap *heap) {
-  assert(heap->len > 0);
+  //assert(heap->len > 0);
 
   HeapNode node = heap->nodes[1];
   heap->len--;

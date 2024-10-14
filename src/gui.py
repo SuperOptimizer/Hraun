@@ -1,6 +1,6 @@
 import sys
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QSlider, QSplitter, QLabel, \
-  QLineEdit, QPushButton, QHBoxLayout, QComboBox, QSpinBox
+  QLineEdit, QPushButton, QHBoxLayout, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox
 from PyQt6.QtCore import Qt
 import matplotlib.pyplot as plt
 import vtk
@@ -68,6 +68,8 @@ class MainWindow(QMainWindow):
     self.color_transfer_function = None
     self.opacity_transfer_function = None
     self.segments = None
+    self.segmented_data = None
+    self.display_segments = False
 
     self.scroll_timestamps = {
       '1': ['20230205180739', '20230206171837'],
@@ -111,6 +113,25 @@ class MainWindow(QMainWindow):
     downscale_layout.addWidget(self.downscale_spinbox)
     self.control_layout.addLayout(downscale_layout)
 
+    # Add compactness input
+    compactness_layout = QHBoxLayout()
+    compactness_layout.addWidget(QLabel("Superpixel Compactness:"))
+    self.compactness_input = QDoubleSpinBox()
+    self.compactness_input.setRange(0, 10000)
+    self.compactness_input.setValue(10)
+    self.compactness_input.setDecimals(2)
+    compactness_layout.addWidget(self.compactness_input)
+    self.control_layout.addLayout(compactness_layout)
+
+    # Add density (d_seed) input
+    density_layout = QHBoxLayout()
+    density_layout.addWidget(QLabel("Superpixel Density:"))
+    self.density_spinbox = QSpinBox()
+    self.density_spinbox.setRange(2, 16)
+    self.density_spinbox.setValue(8)  # Default value, adjust if needed
+    density_layout.addWidget(self.density_spinbox)
+    self.control_layout.addLayout(density_layout)
+
     self.load_button = QPushButton("Load Data")
     self.load_button.clicked.connect(self.load_voxel_data)
     self.control_layout.addWidget(self.load_button)
@@ -122,17 +143,21 @@ class MainWindow(QMainWindow):
     self.control_layout.addWidget(QLabel("Iso Value:"))
     self.control_layout.addWidget(self.iso_slider)
 
-    segment_layout = QHBoxLayout()
-    self.segment_input = QLineEdit()
-    self.segment_input.setPlaceholderText("Enter segment ID")
-    self.segment_input.setValidator(QIntValidator())  # Ensure only integers are entered
-    segment_layout.addWidget(self.segment_input)
+    self.segment_slider = QSlider(Qt.Orientation.Horizontal)
+    self.segment_slider.setRange(0,  255)
+    self.segment_slider.setValue(0)
+    self.segment_slider.valueChanged.connect(self.update_segment_display)
+    self.control_layout.addWidget(QLabel("Segment Selection:"))
+    self.control_layout.addWidget(self.segment_slider)
 
-    self.display_segment_button = QPushButton("Display Segment")
-    self.display_segment_button.clicked.connect(self.display_segment)
-    segment_layout.addWidget(self.display_segment_button)
+    self.do_segmentation_button = QPushButton("Do Segmentation")
+    self.do_segmentation_button.clicked.connect(self.do_segmentation)
+    self.control_layout.addWidget(self.do_segmentation_button)
 
-    self.control_layout.addLayout(segment_layout)
+    self.segment_checkbox = QCheckBox("Display Segments")
+    self.segment_checkbox.setChecked(True)
+    self.segment_checkbox.stateChanged.connect(self.toggle_segment_display)
+    self.control_layout.addWidget(self.segment_checkbox)
 
     self.update_timestamp_options(self.scroll_combo.currentText())
 
@@ -180,33 +205,92 @@ class MainWindow(QMainWindow):
     self.control_layout.addLayout(cc_layout)
 
   @timing_decorator
-  def display_segment(self, *args, **kwargs):
-    segment_id = int(self.segment_input.text()) if self.segment_input.text() else None
-    if segment_id is not None:
-      print(f"Displaying segment: {segment_id}")
+  def do_segmentation(self, *args, **kwargs):
+    compactness = float(self.compactness_input.text())
+    density = self.density_spinbox.value()
+    data = self.voxel_data
+    mask = data < self.iso_value
+    data[mask] = 0.0
+    data = numbamath.rescale_array(data)
 
-      data = self.voxel_data
-      mask = data < self.iso_value
-      data[mask] = 0
-      superpixels, labels, segments = segment.segment(data, self.iso_value)
-      data = segment.label_data(data,labels,segments[segment_id])
+    data = skimage.restoration.denoise_tv_chambolle(data, weight=.1)
+    data = preprocessing.global_local_contrast_3d(data)
+    data = skimage.exposure.equalize_adapthist(data, nbins=16)
 
+    superpixels, labels, segs, sp_to_seg = segment.segment(data, compactness, density, self.iso_value)
+    self.segmented_data = segment.label_data(labels,superpixels,sp_to_seg,len(segs))
 
-      if self.volume_mapper is None:
-        self.setup_vtk_pipeline()
+    if self.volume_mapper is None:
+      self.setup_vtk_pipeline()
 
-      self.render_volume(data)
+    self.update_display()
+
+  def toggle_segment_display(self, state):
+    self.display_segments = state == Qt.CheckState.Checked.value
+    self.update_display()
+
+  def update_display(self):
+    if self.display_segments:
+      self.update_segment_display(self.segment_slider.value())
     else:
-      print("Please enter a valid segment ID")
+      self.update_voxel_display()
 
+  def update_segment_display(self, segment_id):
+    if self.segmented_data is None:
+      return
 
+    display_data = np.zeros_like(self.segmented_data)
+    display_data[self.segmented_data == segment_id] = 255
 
+    self.update_segment_color_transfer_function(segment_id)
+    self.render_volume(display_data)
+
+  def update_voxel_display(self):
+    self.update_voxel_color_transfer_function()
+    self.render_volume(self.voxel_data)
+
+  def update_segment_color_transfer_function(self, segment_id):
+    self.color_transfer_function.RemoveAllPoints()
+    cmap = plt.get_cmap("viridis")
+    color = cmap(segment_id / 255)
+    self.color_transfer_function.AddRGBPoint(0, 0, 0, 0)  # Transparent for non-selected segments
+    self.color_transfer_function.AddRGBPoint(1, color[0], color[1], color[2])  # Colored for selected segment
+    self.volume_property.SetColor(self.color_transfer_function)
+
+  def update_voxel_color_transfer_function(self):
+    self.color_transfer_function.RemoveAllPoints()
+    cmap = plt.get_cmap("viridis")
+    for i in range(256):
+      color = cmap(i / 255.0)
+      self.color_transfer_function.AddRGBPoint(i, color[0], color[1], color[2])
+    self.volume_property.SetColor(self.color_transfer_function)
+
+  def create_viridis_color_function(self):
+    color_function = vtk.vtkColorTransferFunction()
+    cmap = plt.get_cmap("viridis")
+    for i in range(256):
+      color = cmap(i / 255.0)
+      color_function.AddRGBPoint(i, color[0], color[1], color[2])
+    return color_function
+
+  def update_opacity_transfer_function(self):
+    if self.opacity_transfer_function is not None:
+      self.opacity_transfer_function.RemoveAllPoints()
+      if self.display_segments:
+        self.opacity_transfer_function.AddPoint(0, 0.0)
+        self.opacity_transfer_function.AddPoint(1, 1.0)
+      else:
+        self.opacity_transfer_function.AddPoint(0, 0.0)
+        self.opacity_transfer_function.AddPoint(self.iso_value - 1, 0.0)
+        self.opacity_transfer_function.AddPoint(self.iso_value, 1.0)
+        self.opacity_transfer_function.AddPoint(255, 1.0)
+      if self.vtk_widget.GetRenderWindow():
+        self.vtk_widget.GetRenderWindow().Render()
 
   def remove_largest_components(self):
     self.voxel_data = segment.analyze_and_process_components(self.voxel_data, self.iso_value, self.large_count_spinbox.value(),True,True)
     self.render_volume(self.voxel_data)
     print(f"Removed the {self.large_count_spinbox.value()} largest components.")
-
 
   def remove_smallest_components(self):
     self.voxel_data = segment.analyze_and_process_components(self.voxel_data, self.iso_value, self.small_count_spinbox.value(),False,True)
@@ -225,10 +309,10 @@ class MainWindow(QMainWindow):
     self.volume_property = vtk.vtkVolumeProperty()
     self.volume_property.SetInterpolationTypeToLinear()
     self.volume_property.ShadeOn()
-    self.volume_property.SetAmbient(0.8)
-    self.volume_property.SetDiffuse(0.3)
-    self.volume_property.SetSpecular(0.1)
-    self.volume_property.SetSpecularPower(10)
+    self.volume_property.SetAmbient(0.6)
+    self.volume_property.SetDiffuse(0.6)
+    self.volume_property.SetSpecular(0.6)
+    self.volume_property.SetSpecularPower(100)
 
     self.color_transfer_function = self.create_viridis_color_function()
     self.volume_property.SetColor(self.color_transfer_function)
@@ -257,26 +341,26 @@ class MainWindow(QMainWindow):
     data = common.get_chunk(volume_id, timestamp, offset_dims[0], offset_dims[1], offset_dims[2])
     print("loaded data")
 
+    data = data[0:256, 0:256, 0:256]
     if downscale_factor > 1:
       data = numbamath.sumpool(data,
                                (downscale_factor, downscale_factor, downscale_factor),
                                (downscale_factor, downscale_factor, downscale_factor), (1, 1, 1))
-    #data = data[0:256,0:256,0:256]
+
+    #data = skimage.restoration.denoise_tv_chambolle(data, weight=.1)
+    #data = preprocessing.global_local_contrast_3d(data)
+    #data = skimage.exposure.equalize_adapthist(data,nbins=16)
     data = data.astype(np.float32)
     data = numbamath.rescale_array(data)
-    data = skimage.restoration.denoise_tv_chambolle(data, weight=.1)
-    data = preprocessing.global_local_contrast_3d(data)
-    data = skimage.exposure.equalize_adapthist(data,nbins=16)
+
     data *= 255.
-    data = data.astype(np.uint8)
-    data = data.astype(np.float32)
     self.voxel_data = data
     print("preprocessed data")
 
     if self.volume_mapper is None:
       self.setup_vtk_pipeline()
 
-    self.render_volume(data)
+    self.update_display()
 
   @timing_decorator
   def render_volume(self, voxel_data, *args, **kwargs):
@@ -292,7 +376,7 @@ class MainWindow(QMainWindow):
     self.renderer.ResetCamera()
     self.vtk_widget.GetRenderWindow().Render()
 
-  @timing_decorator
+  #@timing_decorator
   def update_opacity_transfer_function(self, *args, **kwargs):
     if self.opacity_transfer_function is not None:
       self.opacity_transfer_function.RemoveAllPoints()
@@ -311,7 +395,7 @@ class MainWindow(QMainWindow):
       if self.vtk_widget.GetRenderWindow():
         self.vtk_widget.GetRenderWindow().Render()
 
-  @timing_decorator
+  #@timing_decorator
   def update_iso_value(self, value, *args, **kwargs):
     self.iso_value = value
     self.opacity_cap = value
@@ -337,15 +421,6 @@ class MainWindow(QMainWindow):
     vtk_image.GetPointData().SetScalars(vtk_array)
 
     return vtk_image
-
-  @timing_decorator
-  def create_viridis_color_function(self, *args, **kwargs):
-    color_function = vtk.vtkColorTransferFunction()
-    cmap = plt.get_cmap("viridis")
-    for i in range(256):
-      color = cmap(i / 255.0)
-      color_function.AddRGBPoint(i, color[0], color[1], color[2])
-    return color_function
 
   @timing_decorator
   def setup_point_picking(self, *args, **kwargs):

@@ -1,9 +1,9 @@
 import numpy as np
 from scipy.optimize import minimize_scalar
-import cv2
 
 from common import timing_decorator
 from src.numbamath import rescale_array
+import cv2
 
 
 #https://github.com/pengyan510/glcae/tree/master

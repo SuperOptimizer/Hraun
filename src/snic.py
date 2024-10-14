@@ -85,7 +85,7 @@ def snic(img, d_seed, compactness, lowmid, midhig):
     if platform.system() == 'Windows':
         os.makedirs(f"{ROOTDIR}/bin", exist_ok=True)
         if not os.path.exists(f"{ROOTDIR}/bin/snic.dll"):
-            asdf = subprocess.run(r"clang.exe c/snic.c -shared -o {}/bin/snic.dll -O3 -g3 -march=native -ffast-math -fopenmp".format(ROOTDIR).split(),
+            asdf = subprocess.run(r"clang.exe c/snic.c -shared -o {}/bin/snic.dll -O3 -g3 -march=native -ffast-math -fopenmp -DNDEBUG".format(ROOTDIR).split(),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             print(asdf)
         snic_lib = ctypes.CDLL(f'{ROOTDIR}/bin/snic.dll')
