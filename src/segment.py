@@ -8,8 +8,10 @@ from scipy.spatial import cKDTree
 import copy
 import bisect
 
-from common import timing_decorator, CACHEDIR, get_chunk
-from numbamath import argmaxpool, argminpool, sumpool, avgpool, minpool, maxpool, index_to_offset_3d, rescale_array
+
+
+from common import timing_decorator, get_chunk
+from numbamath import sumpool, rescale_array, get_superpixel_connectivity
 from preprocessing import global_local_contrast_3d
 import snic
 
@@ -109,7 +111,6 @@ class KDTree3D:
 
     indices = self.tree.query_ball_point(query_point, radius)
     return [(np.linalg.norm(np.array(self.points[i]) - np.array(query_point)),
-             self.points[i],
              self.superpixels[i]) for i in indices]
 
   def get_all_points_with_superpixels(self):
@@ -120,21 +121,53 @@ class KDTree3D:
     self.superpixels = []
     self.tree = None
 
+@timing_decorator
+def bin_superpixels(superpixels, nbins):
+  bins = []
+  for x in range(nbins):
+    bins.append(set())
+  for sp in superpixels:
+    bins[int(sp.c*255.0 / nbins)].add(sp)
+  return bins
+
 
 @timing_decorator
-def superpixel_flow(superpixels: [snic.Superpixel], iso):
+def superpixel_flow(superpixels: [snic.Superpixel], labels, iso, density, compactness, nbins, data):
   segments = []
   frontiers = []
   processed = set()
 
+  #kdtree = KDTree3D()
+  #points = [(sp.z,sp.y,sp.x) for sp in superpixels]
+  #kdtree.add_points(points, superpixels)
+
+  # we want seed values that are both high and fairly regularly distributed throughout the
+  # chunk
+  for x in range(256):
+    segments.append(set())
+    frontiers.append(set())
+
+  bins = bin_superpixels(superpixels, nbins)
+  n = 0
+  seeds = set()
+  for bin in reversed(bins):
+    if n == 256:
+      break
+    for sp in bin:
+      seeds.add(sp)
+      n+=1
+      if n == 256:
+        break
+
+  for i, sp in enumerate(seeds):
+    segments[i].add(sp)
+    frontiers[i] = list(reversed(sorted(sp.neighs, key=lambda x: x.c)))
+
+  superpixel_connectivity = get_superpixel_connectivity(len(superpixels), labels, data)
+
   for _ in range(256):
     segments.append(set())
     frontiers.append(list())
-
-  seeds = random.sample(superpixels, 256)
-  for i,sp in enumerate(seeds):
-    segments[i].add(sp)
-    frontiers[i] = list(reversed(sorted(sp.neighs, key=lambda x: x.c)))
 
   cur = 1
   len_at_last_check = 0
@@ -156,6 +189,13 @@ def superpixel_flow(superpixels: [snic.Superpixel], iso):
         continue
       segment.add(candidate)
       processed.add(candidate)
+
+      connectivity  = np.nonzero(superpixel_connectivity[candidate.label])[0]
+
+      #for whatever reason, just because the voxels are adjacent, doesnt mean that the
+
+      connectedness = [superpixel_connectivity[candidate.label][i] for i in connectivity]
+      print()
       for n in candidate.neighs:
         if n.c < iso:
           segments[0].add(n)
@@ -167,32 +207,29 @@ def superpixel_flow(superpixels: [snic.Superpixel], iso):
       pass
       #print()
     cur+=1
-    print(cur)
-    print(f"len processed {len(processed)}")
-    print(f"len superpixels {len(superpixels)}")
 
   sp_to_seg = dict()
-  #seg_to_sp = dict()
+  segments = list(filter(lambda x: len(x) > 0,segments))
   segmentssorted = list(sorted(segments,key=lambda x: sum(_.c for _ in x)/len(x)))
 
   for i,segment in enumerate(segmentssorted):
     for sp in segment:
       sp_to_seg[sp] = i
-      #seg_to_sp[i] = sp
 
   for sp in superpixels:
     if sp not in sp_to_seg:
       #for whatever reason we didnt process this superpixel so just add it to the void segment
       sp_to_seg[sp] = 0
       segments[0].add(sp)
-      #seg_to_sp[0]
 
   return segmentssorted, sp_to_seg
 
+@timing_decorator
+def get_segment_connectivity(superpixels, labels, segments, data):
+  connectivity = get_superpixel_connectivity(len(superpixels), labels)
 
 @timing_decorator
 def label_data(labels, superpixels, sp_to_segment, nsegments):
-  assert 1 <= nsegments <= 256
   ret = np.zeros_like(labels)
   for z in range(labels.shape[0]):
     for y in range(labels.shape[1]):
@@ -205,16 +242,16 @@ def label_data(labels, superpixels, sp_to_segment, nsegments):
 
 
 @timing_decorator
-def segment(data, compactness, density, iso):
+def segment(data, compactness, density, iso, nbins):
   if iso > 1:
     iso /= 256
   # we dont know how data is scaled so just rescale to 0 - 1
   data = rescale_array(data)
-  neigh_overflow, labels, superpixels = snic.snic(data, density, compactness, 80, 160)
-  #we dont want to go over 256 segments within a chunk, so lets just force ourselves
-  #to only ever have 256 segments starting from 256 seeds
 
-  segs, sp_to_seg = superpixel_flow(superpixels, iso)
+  neigh_overflow, labels, superpixels = snic.snic(data, density, compactness, 80, 160)
+  print(f"neighbor overflow {neigh_overflow}")
+
+  segs, sp_to_seg = superpixel_flow(superpixels, labels, iso, density, compactness, nbins, data)
   return superpixels, labels, segs, sp_to_seg
 
 

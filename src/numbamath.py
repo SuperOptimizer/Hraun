@@ -304,3 +304,39 @@ def argminpool(input_array, kernel_size, stride, dilation):
                   min_distance = distance
         output[d, h, w] = min_index
   return output
+
+@jit(nopython=True)
+def get_superpixel_connectivity(num_superpixels, labels, data):
+  ret = np.zeros(shape=(num_superpixels,num_superpixels), dtype=np.float32)
+  for z in range(labels.shape[0]):
+    for y in range(labels.shape[1]):
+      for x in range(labels.shape[2]):
+        l = labels[z, y, x]
+
+        for dz, dy, dx in ((1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)):
+          if dz + z < 0 or dz + z >= labels.shape[0]:
+            continue
+          if dy + y < 0 or dy + y >= labels.shape[1]:
+            continue
+          if dx + x < 0 or dx + x >= labels.shape[2]:
+            continue
+          other = labels[z + dz, y + dy, x + dx]
+          if other == l:
+            continue
+          ret[l,other] += data[z+dz,y+dy,x+dx]
+
+        #for dz in range(-1,2):
+        #  for dy in range(-1,2):
+        #    for dx in range(-2,1):
+        #      if dz == dy == dx == 0:
+        #        continue
+        #      if dz + z < 0 or dz + z >= labels.shape[0]:
+        #        continue
+        #      if dy + y < 0 or dy + y >= labels.shape[1]:
+        #        continue
+        #      if dx + x < 0 or dx + x >= labels.shape[2]:
+        #        continue
+        #      other = labels[z+dz,y+dy,x+dx]
+        #      ret[l,other] += data[z+dz,y+dy,x+dx]
+  return ret
+

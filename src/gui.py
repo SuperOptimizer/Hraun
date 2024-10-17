@@ -69,7 +69,9 @@ class MainWindow(QMainWindow):
     self.opacity_transfer_function = None
     self.segments = None
     self.segmented_data = None
+    self.num_segments=0
     self.display_segments = False
+    self.data_nbins = 16
 
     self.scroll_timestamps = {
       '1': ['20230205180739', '20230206171837'],
@@ -144,7 +146,7 @@ class MainWindow(QMainWindow):
     self.control_layout.addWidget(self.iso_slider)
 
     self.segment_slider = QSlider(Qt.Orientation.Horizontal)
-    self.segment_slider.setRange(0,  255)
+    self.segment_slider.setRange(0,  self.num_segments)
     self.segment_slider.setValue(0)
     self.segment_slider.valueChanged.connect(self.update_segment_display)
     self.control_layout.addWidget(QLabel("Segment Selection:"))
@@ -211,14 +213,14 @@ class MainWindow(QMainWindow):
     data = self.voxel_data
     mask = data < self.iso_value
     data[mask] = 0.0
-    data = numbamath.rescale_array(data)
+    #data = numbamath.rescale_array(data)
 
-    data = skimage.restoration.denoise_tv_chambolle(data, weight=.1)
-    data = preprocessing.global_local_contrast_3d(data)
-    data = skimage.exposure.equalize_adapthist(data, nbins=16)
-
-    superpixels, labels, segs, sp_to_seg = segment.segment(data, compactness, density, self.iso_value)
+    superpixels, labels, segs, sp_to_seg = segment.segment(data, compactness, density, self.iso_value, self.data_nbins)
     self.segmented_data = segment.label_data(labels,superpixels,sp_to_seg,len(segs))
+    self.num_segments = len(segs)
+    self.segment_slider.setRange(0,  self.num_segments)
+
+
 
     if self.volume_mapper is None:
       self.setup_vtk_pipeline()
@@ -346,10 +348,10 @@ class MainWindow(QMainWindow):
       data = numbamath.sumpool(data,
                                (downscale_factor, downscale_factor, downscale_factor),
                                (downscale_factor, downscale_factor, downscale_factor), (1, 1, 1))
-
-    #data = skimage.restoration.denoise_tv_chambolle(data, weight=.1)
-    #data = preprocessing.global_local_contrast_3d(data)
-    #data = skimage.exposure.equalize_adapthist(data,nbins=16)
+    #data = skimage.restoration.denoise_tv_chambolle(data, weight=.25)
+    data = preprocessing.global_local_contrast_3d(data)
+    data = skimage.filters.gaussian(data, sigma=2)
+    data = skimage.exposure.equalize_adapthist(data,nbins=self.data_nbins)
     data = data.astype(np.float32)
     data = numbamath.rescale_array(data)
 
