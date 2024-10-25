@@ -130,6 +130,10 @@ def bin_superpixels(superpixels, nbins):
     bins[int(sp.c*255.0 / nbins)].add(sp)
   return bins
 
+#@timing_decorator
+#def segment_superpixel_connectivity(superpixel_connectivity, segment, superpixel):
+
+
 
 @timing_decorator
 def superpixel_flow(superpixels: [snic.Superpixel], labels, iso, density, compactness, nbins, data):
@@ -191,8 +195,6 @@ def superpixel_flow(superpixels: [snic.Superpixel], labels, iso, density, compac
       processed.add(candidate)
 
       connectivity  = np.nonzero(superpixel_connectivity[candidate.label])[0]
-
-      #for whatever reason, just because the voxels are adjacent, doesnt mean that the
 
       connectedness = [superpixel_connectivity[candidate.label][i] for i in connectivity]
       print()

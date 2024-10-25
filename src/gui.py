@@ -10,6 +10,7 @@ from vtkmodules.util import numpy_support
 import numpy as np
 import skimage
 from scipy import ndimage
+import zarr
 
 import common, preprocessing, numbamath, segment
 from src.common import timing_decorator
@@ -59,19 +60,36 @@ class MainWindow(QMainWindow):
 
     self.lights = []
 
+    self.ink_data = None
     self.voxel_data = None
     self.volume = None
-    self.iso_value = 0
-    self.opacity_cap = 255
-    self.volume_mapper = None
-    self.volume_property = None
-    self.color_transfer_function = None
-    self.opacity_transfer_function = None
+    self.voxel_iso_value = 0
+    self.ink_iso_value = 0
+    self.voxel_opacity_cap = 255
+    self.ink_opacity_cap = 255
     self.segments = None
     self.segmented_data = None
     self.num_segments=0
     self.display_segments = False
     self.data_nbins = 16
+    self.ink_zarr = zarr.open(r"D:\dl.ash2txt.org\community-uploads\ryan\3d_predictions_scroll1.zarr",mode='r')
+
+
+    self.volume_mapper = None
+    self.volume_property = None
+    self.color_transfer_function = None
+    self.opacity_transfer_function = None
+    self.voxel_volume = None
+    self.ink_volume = None
+    self.voxel_volume_mapper = None
+    self.ink_volume_mapper = None
+    self.voxel_volume_property = None
+    self.ink_volume_property = None
+    self.voxel_color_transfer_function = None
+    self.ink_color_transfer_function = None
+    self.voxel_opacity_transfer_function = None
+    self.ink_opacity_transfer_function = None
+
 
     self.scroll_timestamps = {
       '1': ['20230205180739', '20230206171837'],
@@ -134,16 +152,23 @@ class MainWindow(QMainWindow):
     density_layout.addWidget(self.density_spinbox)
     self.control_layout.addLayout(density_layout)
 
-    self.load_button = QPushButton("Load Data")
-    self.load_button.clicked.connect(self.load_voxel_data)
-    self.control_layout.addWidget(self.load_button)
+    self.load_data_button = QPushButton("Load Voxel Data")
+    self.load_data_button.clicked.connect(self.load_data)
+    self.control_layout.addWidget(self.load_data_button)
 
-    self.iso_slider = QSlider(Qt.Orientation.Horizontal)
-    self.iso_slider.setRange(0, 255)
-    self.iso_slider.setValue(self.iso_value)
-    self.iso_slider.valueChanged.connect(self.update_iso_value)
-    self.control_layout.addWidget(QLabel("Iso Value:"))
-    self.control_layout.addWidget(self.iso_slider)
+    self.voxel_iso_slider = QSlider(Qt.Orientation.Horizontal)
+    self.voxel_iso_slider.setRange(0, 255)
+    self.voxel_iso_slider.setValue(self.voxel_iso_value)
+    self.voxel_iso_slider.valueChanged.connect(self.update_voxel_iso_value)
+    self.control_layout.addWidget(QLabel("Voxel ISO Value:"))
+    self.control_layout.addWidget(self.voxel_iso_slider)
+
+    self.ink_iso_slider = QSlider(Qt.Orientation.Horizontal)
+    self.ink_iso_slider.setRange(0, 255)
+    self.ink_iso_slider.setValue(self.ink_iso_value)
+    self.ink_iso_slider.valueChanged.connect(self.update_ink_iso_value)
+    self.control_layout.addWidget(QLabel("Ink ISO Value:"))
+    self.control_layout.addWidget(self.ink_iso_slider)
 
     self.segment_slider = QSlider(Qt.Orientation.Horizontal)
     self.segment_slider.setRange(0,  self.num_segments)
@@ -211,16 +236,14 @@ class MainWindow(QMainWindow):
     compactness = float(self.compactness_input.text())
     density = self.density_spinbox.value()
     data = self.voxel_data
-    mask = data < self.iso_value
+    mask = data < self.voxel_iso_value
     data[mask] = 0.0
     #data = numbamath.rescale_array(data)
 
-    superpixels, labels, segs, sp_to_seg = segment.segment(data, compactness, density, self.iso_value, self.data_nbins)
+    superpixels, labels, segs, sp_to_seg = segment.segment(data, compactness, density, self.voxel_iso_value, self.data_nbins)
     self.segmented_data = segment.label_data(labels,superpixels,sp_to_seg,len(segs))
     self.num_segments = len(segs)
     self.segment_slider.setRange(0,  self.num_segments)
-
-
 
     if self.volume_mapper is None:
       self.setup_vtk_pipeline()
@@ -232,10 +255,49 @@ class MainWindow(QMainWindow):
     self.update_display()
 
   def update_display(self):
-    if self.display_segments:
-      self.update_segment_display(self.segment_slider.value())
-    else:
-      self.update_voxel_display()
+    if self.voxel_data is not None and self.ink_data is not None:
+      self.render_volumes()
+
+  def render_volumes(self):
+    voxel_image_data = self.numpy_to_vtk(self.voxel_data)
+    self.voxel_volume_mapper.SetInputData(voxel_image_data)
+
+    ink_image_data = self.numpy_to_vtk(self.ink_data)
+    self.ink_volume_mapper.SetInputData(ink_image_data)
+
+    self.update_voxel_opacity_transfer_function()
+    self.update_ink_opacity_transfer_function()
+
+    self.renderer.ResetCamera()
+    self.vtk_widget.GetRenderWindow().Render()
+
+  def update_voxel_opacity_transfer_function(self):
+    self.voxel_opacity_transfer_function.RemoveAllPoints()
+    self.voxel_opacity_transfer_function.AddPoint(0, 0.0)
+    self.voxel_opacity_transfer_function.AddPoint(self.voxel_iso_value - 1, 0.0)
+    self.voxel_opacity_transfer_function.AddPoint(self.voxel_iso_value, 1.0)
+    self.voxel_opacity_transfer_function.AddPoint(255, 1.0)
+
+  def update_ink_opacity_transfer_function(self):
+    self.ink_opacity_transfer_function.RemoveAllPoints()
+    self.ink_opacity_transfer_function.AddPoint(0, 0.0)
+    self.ink_opacity_transfer_function.AddPoint(self.ink_iso_value - 1, 0.0)
+    self.ink_opacity_transfer_function.AddPoint(self.ink_iso_value, 1.0)
+    self.ink_opacity_transfer_function.AddPoint(255, 1.0)
+
+  def update_voxel_iso_value(self, value):
+    self.voxel_iso_value = value
+    self.update_voxel_opacity_transfer_function()
+    self.vtk_widget.GetRenderWindow().Render()
+
+  def update_ink_iso_value(self, value):
+    self.ink_iso_value = value
+    self.update_ink_opacity_transfer_function()
+    self.vtk_widget.GetRenderWindow().Render()
+
+  def blend_data(self):
+    voxel_mask = self.voxel_data >= self.voxel_iso_value
+    self.blended_data = np.where(voxel_mask, self.ink_data, 0)
 
   def update_segment_display(self, segment_id):
     if self.segmented_data is None:
@@ -283,19 +345,19 @@ class MainWindow(QMainWindow):
         self.opacity_transfer_function.AddPoint(1, 1.0)
       else:
         self.opacity_transfer_function.AddPoint(0, 0.0)
-        self.opacity_transfer_function.AddPoint(self.iso_value - 1, 0.0)
-        self.opacity_transfer_function.AddPoint(self.iso_value, 1.0)
+        self.opacity_transfer_function.AddPoint(self.voxel_iso_value - 1, 0.0)
+        self.opacity_transfer_function.AddPoint(self.voxel_iso_value, 1.0)
         self.opacity_transfer_function.AddPoint(255, 1.0)
       if self.vtk_widget.GetRenderWindow():
         self.vtk_widget.GetRenderWindow().Render()
 
   def remove_largest_components(self):
-    self.voxel_data = segment.analyze_and_process_components(self.voxel_data, self.iso_value, self.large_count_spinbox.value(),True,True)
+    self.voxel_data = segment.analyze_and_process_components(self.voxel_data, self.voxel_iso_value, self.large_count_spinbox.value(),True,True)
     self.render_volume(self.voxel_data)
     print(f"Removed the {self.large_count_spinbox.value()} largest components.")
 
   def remove_smallest_components(self):
-    self.voxel_data = segment.analyze_and_process_components(self.voxel_data, self.iso_value, self.small_count_spinbox.value(),False,True)
+    self.voxel_data = segment.analyze_and_process_components(self.voxel_data, self.voxel_iso_value, self.small_count_spinbox.value(),False,True)
     self.render_volume(self.voxel_data)
     print(f"Removed the {self.small_count_spinbox.value()} smallest components.")
 
@@ -305,34 +367,61 @@ class MainWindow(QMainWindow):
     self.timestamp_combo.addItems(self.scroll_timestamps[scroll_number])
 
   @timing_decorator
-  def setup_vtk_pipeline(self, *args, **kwargs):
-    self.volume_mapper = vtk.vtkSmartVolumeMapper()
+  def setup_vtk_pipeline(self):
+    # Setup for voxel data
+    self.voxel_volume_mapper = vtk.vtkSmartVolumeMapper()
+    self.voxel_volume_property = vtk.vtkVolumeProperty()
+    self.voxel_volume_property.SetInterpolationTypeToLinear()
+    self.voxel_volume_property.ShadeOn()
+    self.voxel_volume_property.SetAmbient(0.6)
+    self.voxel_volume_property.SetDiffuse(0.6)
+    self.voxel_volume_property.SetSpecular(0.6)
+    self.voxel_volume_property.SetSpecularPower(100)
 
-    self.volume_property = vtk.vtkVolumeProperty()
-    self.volume_property.SetInterpolationTypeToLinear()
-    self.volume_property.ShadeOn()
-    self.volume_property.SetAmbient(0.6)
-    self.volume_property.SetDiffuse(0.6)
-    self.volume_property.SetSpecular(0.6)
-    self.volume_property.SetSpecularPower(100)
+    self.voxel_color_transfer_function = self.create_color_function("viridis")
+    self.voxel_volume_property.SetColor(self.voxel_color_transfer_function)
 
-    self.color_transfer_function = self.create_viridis_color_function()
-    self.volume_property.SetColor(self.color_transfer_function)
+    self.voxel_opacity_transfer_function = vtk.vtkPiecewiseFunction()
+    self.voxel_volume_property.SetScalarOpacity(self.voxel_opacity_transfer_function)
 
-    self.opacity_transfer_function = vtk.vtkPiecewiseFunction()
-    self.volume_property.SetScalarOpacity(self.opacity_transfer_function)
+    self.voxel_volume = vtk.vtkVolume()
+    self.voxel_volume.SetMapper(self.voxel_volume_mapper)
+    self.voxel_volume.SetProperty(self.voxel_volume_property)
 
-    self.volume = vtk.vtkVolume()
-    self.volume.SetMapper(self.volume_mapper)
-    self.volume.SetProperty(self.volume_property)
+    # Setup for ink data
+    self.ink_volume_mapper = vtk.vtkSmartVolumeMapper()
+    self.ink_volume_property = vtk.vtkVolumeProperty()
+    self.ink_volume_property.SetInterpolationTypeToLinear()
+    self.ink_volume_property.ShadeOn()
+    self.ink_volume_property.SetAmbient(0.6)
+    self.ink_volume_property.SetDiffuse(0.6)
+    self.ink_volume_property.SetSpecular(0.6)
+    self.ink_volume_property.SetSpecularPower(100)
 
-    self.renderer.AddVolume(self.volume)
+    self.ink_color_transfer_function = self.create_color_function("inferno")
+    self.ink_volume_property.SetColor(self.ink_color_transfer_function)
+
+    self.ink_opacity_transfer_function = vtk.vtkPiecewiseFunction()
+    self.ink_volume_property.SetScalarOpacity(self.ink_opacity_transfer_function)
+
+    self.ink_volume = vtk.vtkVolume()
+    self.ink_volume.SetMapper(self.ink_volume_mapper)
+    self.ink_volume.SetProperty(self.ink_volume_property)
+
+    self.renderer.AddVolume(self.voxel_volume)
+    self.renderer.AddVolume(self.ink_volume)
 
     self.renderer.ResetCamera()
 
-  @timing_decorator
-  def load_voxel_data(self, *args, **kwargs):
+  def create_color_function(self, colormap_name):
+    color_function = vtk.vtkColorTransferFunction()
+    cmap = plt.get_cmap(colormap_name)
+    for i in range(256):
+      color = cmap(i / 255.0)
+      color_function.AddRGBPoint(i, color[0], color[1], color[2])
+    return color_function
 
+  def load_data(self, *args, **kwargs):
     volume_id = int(self.scroll_combo.currentText())
     timestamp = int(self.timestamp_combo.currentText())
     offset_dims = [int(self.coord_z.text()), int(self.coord_y.text()), int(self.coord_x.text())]
@@ -340,29 +429,34 @@ class MainWindow(QMainWindow):
 
     print(f"Loading data for {volume_id}, source timestamp {timestamp}")
     print(f"Offsets: {offset_dims}")
-    data = common.get_chunk(volume_id, timestamp, offset_dims[0], offset_dims[1], offset_dims[2])
-    print("loaded data")
-
-    data = data[0:256, 0:256, 0:256]
+    #data = common.get_chunk(volume_id, timestamp, offset_dims[0], offset_dims[1], offset_dims[2])
+    data = common.get_chunk("","",1024,1024,1024,16,2048,2048)
+    #data = data[0:256, 0:256, 0:256]
     if downscale_factor > 1:
       data = numbamath.sumpool(data,
                                (downscale_factor, downscale_factor, downscale_factor),
                                (downscale_factor, downscale_factor, downscale_factor), (1, 1, 1))
-    #data = skimage.restoration.denoise_tv_chambolle(data, weight=.25)
-    data = preprocessing.global_local_contrast_3d(data)
+    # data = skimage.restoration.denoise_tv_chambolle(data, weight=.25)
+    #data = preprocessing.global_local_contrast_3d(data)
     data = skimage.filters.gaussian(data, sigma=2)
-    data = skimage.exposure.equalize_adapthist(data,nbins=self.data_nbins)
+    data = skimage.exposure.equalize_adapthist(data, nbins=self.data_nbins*4)
     data = data.astype(np.float32)
     data = numbamath.rescale_array(data)
 
     data *= 255.
     self.voxel_data = data
-    print("preprocessed data")
 
-    if self.volume_mapper is None:
+    #z,y,x = offset_dims[0]*500, offset_dims[1]*500, offset_dims[2]*500
+    z,y,x = 1024,1024,1024
+    ink_data = self.ink_zarr[y:y+2048,x:x+2048,z:z+16]
+    ink_data = np.transpose(ink_data, (2,0,1))#ink_data.swapaxes(0, 2)
+    self.ink_data = ink_data.astype(np.float32)
+
+    if self.voxel_volume_mapper is None or self.ink_volume_mapper is None:
       self.setup_vtk_pipeline()
 
     self.update_display()
+
 
   @timing_decorator
   def render_volume(self, voxel_data, *args, **kwargs):
@@ -378,35 +472,10 @@ class MainWindow(QMainWindow):
     self.renderer.ResetCamera()
     self.vtk_widget.GetRenderWindow().Render()
 
-  #@timing_decorator
-  def update_opacity_transfer_function(self, *args, **kwargs):
-    if self.opacity_transfer_function is not None:
-      self.opacity_transfer_function.RemoveAllPoints()
-
-      self.opacity_transfer_function.AddPoint(0, 0.0)
-      self.opacity_transfer_function.AddPoint(self.iso_value - 1, 0.0)
-
-      if self.opacity_cap > self.iso_value:
-        for i in range(self.iso_value, self.opacity_cap + 1):
-          normalized_value = (i - self.iso_value) / (self.opacity_cap - self.iso_value)
-          self.opacity_transfer_function.AddPoint(i, normalized_value)
-
-      self.opacity_transfer_function.AddPoint(self.opacity_cap, 1.0)
-      self.opacity_transfer_function.AddPoint(255, 1.0)
-
-      if self.vtk_widget.GetRenderWindow():
-        self.vtk_widget.GetRenderWindow().Render()
-
-  #@timing_decorator
-  def update_iso_value(self, value, *args, **kwargs):
-    self.iso_value = value
-    self.opacity_cap = value
-    self.update_opacity_transfer_function()
-
   @timing_decorator
   def numpy_to_vtk(self, numpy_array, *args, **kwargs):
     vtk_image = vtk.vtkImageData()
-    vtk_image.SetDimensions(numpy_array.shape)
+    vtk_image.SetDimensions(*numpy_array.shape)
     vtk_image.SetSpacing(1.0, 1.0, 1.0)
     vtk_image.SetOrigin(0.0, 0.0, 0.0)
     vtk_image.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 1)

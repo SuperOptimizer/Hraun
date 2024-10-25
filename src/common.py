@@ -7,6 +7,7 @@ import os
 from PIL import Image
 import time
 from functools import wraps
+import glob
 
 ROOTDIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),'..'))
 
@@ -59,7 +60,7 @@ def download(url):
     return data & 0xf0
 
 @timing_decorator
-def get_chunk(scroll, volume, z, y, x):
+def get_tiff_stack_chunk(scroll, volume, z, y, x):
   assert 1 <= scroll <= 4
   scrolltxt = ['',
                'Scroll1/PHercParis4.volpkg',
@@ -70,3 +71,44 @@ def get_chunk(scroll, volume, z, y, x):
   url = f"https://dl.ash2txt.org/full-scrolls/{scrolltxt}/volume_grids/{volume}/cell_yxz_{y:03d}_{x:03d}_{z:03d}.tif"
   chunk = download(url)
   return chunk
+
+
+@timing_decorator
+def get_chunk(scroll, volume, zstart, ystart, xstart, zsize, ysize, xsize):
+  directory_path = r"D:\dl.ash2txt.org\full-scrolls\Scroll1\PHercParis4.volpkg\volumes_masked\20230205180739"
+  # Get list of TIFF files and sort them
+  tiff_files = sorted(glob.glob(os.path.join(directory_path, '*.tiff')))
+  tiff_files.extend(sorted(glob.glob(os.path.join(directory_path, '*.tif'))))
+
+  # Validate inputs
+  if not tiff_files:
+    raise ValueError("No TIFF files found in directory")
+
+  # Check if we have enough files
+  if zstart + zsize > len(tiff_files):
+    raise ValueError(f"Not enough TIFF files for requested z-range. Found {len(tiff_files)} files.")
+
+  # Check dimensions of first image to validate x,y coordinates
+  sample_img = np.array(Image.open(tiff_files[0]))
+  if (xstart + xsize > sample_img.shape[1] or
+      ystart + ysize > sample_img.shape[0]):
+    raise ValueError(f"Requested cube exceeds image dimensions {sample_img.shape}")
+
+  # Initialize 3D array to store the cube
+  cube = np.zeros((zsize, ysize, xsize), dtype=sample_img.dtype)
+
+  # Extract the requested portion from each relevant TIFF file
+  for z in range(zsize):
+    current_file = tiff_files[z + zstart]
+    img = np.array(Image.open(current_file))
+    if img.dtype == np.uint16:
+      img >>=8
+      img = img.astype(np.uint8)
+    cube[z, :, :] = img[ystart:ystart + ysize,
+                    xstart:xstart + xsize]
+
+  return cube
+
+#def get_full_chunk(scroll,volume,start,size):
+#  ret = []
+#  for z in range(start,size[0]+start):
